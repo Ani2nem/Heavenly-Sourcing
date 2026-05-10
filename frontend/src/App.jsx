@@ -6,6 +6,7 @@ import RecipeAccordion from './components/RecipeAccordion'
 import QuoteTracker from './components/QuoteTracker'
 import PurchaseHistory from './components/PurchaseHistory'
 import NotificationToast from './components/NotificationToast'
+import NotificationBell from './components/NotificationBell'
 
 const navItems = [
   { to: '/', label: 'Profile' },
@@ -17,8 +18,9 @@ const navItems = [
 function Sidebar() {
   return (
     <aside className="w-60 min-h-screen bg-slate-900 text-slate-100 flex flex-col flex-shrink-0">
-      <div className="px-6 py-5 border-b border-slate-700">
+      <div className="px-4 py-5 border-b border-slate-700 flex items-center justify-between">
         <span className="text-lg font-bold tracking-tight text-white">HeavenlySourcing</span>
+        <NotificationBell />
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map(({ to, label }) => (

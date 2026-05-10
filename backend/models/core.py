@@ -1,7 +1,9 @@
 import uuid
-from datetime import datetime
-from typing import Optional
-from sqlmodel import SQLModel, Field
+from datetime import date, datetime
+from typing import Any, Optional
+
+from sqlalchemy import JSON
+from sqlmodel import Column, Field, SQLModel
 
 
 class RestaurantProfile(SQLModel, table=True):
@@ -45,6 +47,15 @@ class Ingredient(SQLModel, table=True):
     shelf_life_days: Optional[int] = None
     usda_fdc_id: Optional[str] = None
 
+    # Per-restaurant pack-size override. When all three are set, the
+    # procurement RFP uses these values instead of the inferred default in
+    # `services/pack_inference.py`. Useful when a vendor publishes a custom
+    # SKU ("we sell mozzarella in 6-lb bags, not 5") or the kitchen has a
+    # standing preference.
+    pack_qty_override: Optional[float] = None
+    pack_unit_override: Optional[str] = None
+    pack_label_override: Optional[str] = None
+
 
 class Recipe(SQLModel, table=True):
     __tablename__ = "recipes"
@@ -61,3 +72,23 @@ class RecipeIngredient(SQLModel, table=True):
     recipe_id: uuid.UUID = Field(foreign_key="recipes.id")
     ingredient_id: uuid.UUID = Field(foreign_key="ingredients.id")
     quantity_required: Optional[float] = None
+
+
+class IngredientPrice(SQLModel, table=True):
+    """A single USDA price observation for an ingredient (one row per report date)."""
+
+    __tablename__ = "ingredient_prices"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    ingredient_id: uuid.UUID = Field(foreign_key="ingredients.id", index=True)
+    source: str = Field(default="AMS_MARKET_NEWS")  # AMS_MARKET_NEWS | NASS | BENCHMARK
+    report_slug: Optional[str] = None
+    region: Optional[str] = None
+    commodity_label: Optional[str] = None
+    unit: str = Field(default="lb")
+    price_low: Optional[float] = None
+    price_high: Optional[float] = None
+    price_mostly: Optional[float] = None
+    as_of_date: Optional[date] = Field(default=None, index=True)
+    raw_payload: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    fetched_at: datetime = Field(default_factory=datetime.utcnow)

@@ -46,3 +46,18 @@ class Notification(SQLModel, table=True):
     message: str
     is_read: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PurchaseReceipt(SQLModel, table=True):
+    __tablename__ = "purchase_receipts"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    procurement_cycle_id: uuid.UUID = Field(foreign_key="procurement_cycles.id")
+    distributor_quote_id: uuid.UUID = Field(foreign_key="distributor_quotes.id")
+    distributor_id: uuid.UUID = Field(foreign_key="distributors.id")
+    receipt_number: Optional[str] = None
+    total_amount: Optional[float] = None
+    line_items: Optional[Any] = Field(default=None, sa_column=Column(JSON))
+    raw_email_subject: Optional[str] = None
+    raw_email_excerpt: Optional[str] = None
+    received_at: datetime = Field(default_factory=datetime.utcnow)

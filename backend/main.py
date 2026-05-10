@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database import create_db_and_tables
-from api import profile, menu, procurement, notifications
+from api import admin, profile, menu, procurement, notifications, ingredients
 
 
 @asynccontextmanager
@@ -31,6 +31,8 @@ app.include_router(profile.router, prefix="/api")
 app.include_router(menu.router, prefix="/api")
 app.include_router(procurement.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
+app.include_router(ingredients.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
 
 
 @app.get("/health")

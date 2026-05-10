@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     google_places_api_key: str = ""
     jina_api_key: str = ""
     usda_api_key: str = ""
+    ams_api_key: str = ""
 
     smtp_server: str = "smtp.gmail.com"
     smtp_port: int = 587

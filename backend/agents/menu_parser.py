@@ -1,14 +1,19 @@
 import base64
 import re
+from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError, JSONDecoder
-from typing import List
+from typing import List, Tuple
 from openai import OpenAI
 from config import settings
 
 _client = OpenAI(api_key=settings.openai_api_key)
 
 # Text PDFs can exceed a single completion (gpt-4o max ~16k out tokens). Parse in page batches.
-TEXT_PAGES_PER_BATCH = 2
+# Use 1 page per batch — large menus (Heavenly-style with many size + topping variants) easily
+# generate 200+ dish objects per page once expanded, which can blow past the 16k output cap.
+TEXT_PAGES_PER_BATCH = 1
+MAX_BATCH_RETRY_SPLITS = 3   # how many times we'll split a stubborn chunk in half before giving up
+MAX_PARALLEL_OPENAI_CALLS = 8   # OpenAI tier-1 default RPM is plenty for this; 8 is a safe ceiling
 
 # ─── System prompts ───────────────────────────────────────────────────────────
 
@@ -218,7 +223,43 @@ def _loads_menu_json(text: str) -> dict:
     return obj
 
 
-def _safe_parse(raw: str, context: str = "") -> dict:
+def _extract_dishes_lossy(raw: str) -> list:
+    """
+    Best-effort scan that pulls every well-formed dish object out of a partial or syntactically
+    broken JSON response. Used when the model truncates mid-output (`finish_reason="length"`)
+    or makes a small syntax error (e.g. missing comma between two ingredient rows somewhere
+    deep in the response). We walk the string, try to `raw_decode` at each `{`, and keep
+    objects that look like a dish (have `name` and `ingredients`).
+    """
+    s = _strip_markdown_fences(raw)
+    s = _strip_trailing_commas(s)
+    decoder = JSONDecoder()
+    dishes: list = []
+    pos = 0
+    n = len(s)
+    while pos < n:
+        idx = s.find("{", pos)
+        if idx < 0:
+            break
+        try:
+            obj, end = decoder.raw_decode(s, idx)
+        except JSONDecodeError:
+            pos = idx + 1
+            continue
+        if isinstance(obj, dict) and "name" in obj and "ingredients" in obj and isinstance(obj.get("ingredients"), list):
+            dishes.append(obj)
+            pos = end
+        else:
+            pos = idx + 1
+    return dishes
+
+
+def _safe_parse(raw: str, context: str = "", *, truncated: bool = False) -> dict:
+    """
+    Try strict JSON first. On failure, fall back to a lossy scan that pulls out every
+    well-formed dish object — this lets us salvage results from truncated completions.
+    Returns {"dishes": [...], "confidence_score": ...} (possibly empty dishes list).
+    """
     from agents.ingredient_units import apply_sanitized_dishes
 
     try:
@@ -226,6 +267,12 @@ def _safe_parse(raw: str, context: str = "") -> dict:
     except (JSONDecodeError, ValueError) as e:
         ctx = f" ({context})" if context else ""
         print(f"[menu_parser] JSON decode failed{ctx}: {e}")
+        if truncated:
+            print(f"[menu_parser] -> output was truncated at max_tokens; attempting lossy recovery")
+        salvaged_dishes = _extract_dishes_lossy(raw)
+        if salvaged_dishes:
+            print(f"[menu_parser] lossy recovery salvaged {len(salvaged_dishes)} dish(es) from broken JSON")
+            return apply_sanitized_dishes({"dishes": salvaged_dishes, "confidence_score": 70})
         print(f"[menu_parser] Raw (first 500 chars): {raw[:500]}")
         if len(raw) > 500:
             print(f"[menu_parser] Raw (last 400 chars): {raw[-400:]}")
@@ -269,9 +316,58 @@ def _parse_menu_text_single(user_content: str, context: str = "text path") -> di
         response_format={"type": "json_object"},
     )
     choice = response.choices[0]
-    if getattr(choice, "finish_reason", None) == "length":
-        print(f"[menu_parser] WARNING: completion truncated ({context}) — reduce TEXT_PAGES_PER_BATCH if JSON fails")
-    return _safe_parse((choice.message.content or "").strip(), context)
+    truncated = getattr(choice, "finish_reason", None) == "length"
+    if truncated:
+        print(f"[menu_parser] WARNING: completion truncated ({context}) — output hit max_tokens")
+    return _safe_parse((choice.message.content or "").strip(), context, truncated=truncated)
+
+
+def _split_text_in_half(text: str) -> Tuple[str, str]:
+    """
+    Split a chunk of menu text roughly in half on a paragraph boundary so each half can be
+    parsed independently. Used as a last resort when a single-page batch still truncates.
+    """
+    n = len(text)
+    if n < 200:
+        return text, ""
+    mid = n // 2
+    # Find the nearest blank-line boundary so we don't bisect a dish description
+    candidates = [text.rfind("\n\n", 0, mid), text.find("\n\n", mid)]
+    candidates = [c for c in candidates if c > 0]
+    if candidates:
+        split_at = min(candidates, key=lambda c: abs(c - mid))
+    else:
+        split_at = text.rfind("\n", 0, mid) or mid
+    return text[:split_at].strip(), text[split_at:].strip()
+
+
+def _parse_menu_text_with_autosplit(user_content: str, context: str, depth: int = 0) -> dict:
+    """
+    Parse a menu text chunk, recursively splitting in half if the output truncates and we
+    can't recover any dishes. The two halves are parsed in PARALLEL so a split adds no
+    extra wall-clock time beyond a single LLM call. Caps recursion depth at
+    MAX_BATCH_RETRY_SPLITS to avoid runaway calls on a genuinely malformed chunk.
+    """
+    result = _parse_menu_text_single(user_content, context)
+    dishes = result.get("dishes") or []
+    if dishes or depth >= MAX_BATCH_RETRY_SPLITS:
+        return result
+
+    left, right = _split_text_in_half(user_content)
+    if not left or not right:
+        return result
+
+    print(f"[menu_parser] auto-splitting chunk ({context}) and retrying both halves in parallel (depth={depth + 1})")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left_future = pool.submit(_parse_menu_text_with_autosplit, left, f"{context} -> half A", depth + 1)
+        right_future = pool.submit(_parse_menu_text_with_autosplit, right, f"{context} -> half B", depth + 1)
+        left_result = left_future.result()
+        right_result = right_future.result()
+    merged_dishes = (left_result.get("dishes") or []) + (right_result.get("dishes") or [])
+    a = float(left_result.get("confidence_score") or 0)
+    b = float(right_result.get("confidence_score") or 0)
+    avg = round((a + b) / 2, 1) if (a or b) else 0
+    return {"dishes": merged_dishes, "confidence_score": avg}
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -295,11 +391,13 @@ def parse_menu_text(text: str) -> dict:
             "Extract every dish and ingredient.\n\n"
             + batches[0]
         )
-        return _parse_menu_text_single(wrapped, "text path")
+        return _parse_menu_text_with_autosplit(wrapped, "text path")
 
-    all_dishes: list = []
-    confidence_sum = 0.0
+    # ── Multi-batch: dispatch all batches in parallel ─────────────────────────
+    # Each page is an independent LLM call, so we fire them concurrently and
+    # collapse total wall-time to ~one slow call instead of N sequential ones.
     n_batches = len(batches)
+    wrapped_batches: List[Tuple[int, str]] = []
     for bi, batch in enumerate(batches):
         start_p = bi * TEXT_PAGES_PER_BATCH + 1
         end_p = min((bi + 1) * TEXT_PAGES_PER_BATCH, len(pages))
@@ -309,7 +407,30 @@ def parse_menu_text(text: str) -> dict:
             "Do not invent dishes from other pages.\n\n"
             + batch
         )
-        part = _parse_menu_text_single(wrapped, f"text path batch {bi + 1}/{n_batches}")
+        wrapped_batches.append((bi, wrapped))
+
+    print(f"[menu_parser] dispatching {n_batches} text batches in parallel (max_workers={min(MAX_PARALLEL_OPENAI_CALLS, n_batches)})")
+    parts: List[dict] = [None] * n_batches  # type: ignore[list-item]
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_OPENAI_CALLS, n_batches)) as pool:
+        futures = {
+            pool.submit(
+                _parse_menu_text_with_autosplit,
+                wrapped,
+                f"text path batch {bi + 1}/{n_batches}",
+            ): bi
+            for bi, wrapped in wrapped_batches
+        }
+        for fut in futures:
+            bi = futures[fut]
+            try:
+                parts[bi] = fut.result()
+            except Exception as exc:
+                print(f"[menu_parser] batch {bi + 1}/{n_batches} crashed: {exc}")
+                parts[bi] = {"dishes": [], "confidence_score": 0}
+
+    all_dishes: list = []
+    confidence_sum = 0.0
+    for part in parts:
         all_dishes.extend(part.get("dishes") or [])
         confidence_sum += float(part.get("confidence_score") or 0)
 
