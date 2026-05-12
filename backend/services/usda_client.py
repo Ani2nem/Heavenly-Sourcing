@@ -55,6 +55,60 @@ _CATEGORY_BENCHMARK_PER_LB: Dict[str, float] = {
 _MASS_UNITS = {"lb", "oz", "g", "kg"}
 
 
+# Per-ingredient overrides for items that have no AMS commodity match AND
+# whose natural recipe unit isn't mass-based, so the category $/lb fallback
+# doesn't fire. These are hand-curated industry midpoints in the
+# ingredient's *own* unit — pizza dough is sold by the ball, sauces by
+# fluid ounce out of a #10 can / 1-gal jug. Same honesty rules as the
+# category table: NOT USDA-sourced, rendered with `industry est`, NEVER
+# tagged as USDA.
+#
+# Match is case-insensitive substring against the ingredient name, so
+# "Whole-Wheat Pizza Dough" still hits `pizza dough`. Keep the keys narrow
+# enough that they don't collide with unrelated dishes.
+_INGREDIENT_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # Bakery, per ball (~9–12 oz raw)
+    "pizza dough":     {"value": 0.60, "unit": "each"},
+    # Condiments, per fluid ounce. Ballpark wholesale (per #10 can ≈ 104 fl oz
+    # or 1-gal jug ≈ 128 fl oz):
+    #   pizza sauce    ~$6  / #10 can          → $0.06/fl oz
+    #   marinara sauce ~$8  / #10 can          → $0.08/fl oz
+    #   salsa sauce    ~$8  / #10 can          → $0.08/fl oz
+    #   bbq sauce      ~$11 / 1-gal jug        → $0.09/fl oz
+    #   buffalo sauce  ~$11 / 1-gal jug        → $0.09/fl oz
+    #   hot sauce      ~$9  / 1-gal jug        → $0.07/fl oz
+    #   ranch sauce    ~$13 / 1-gal jug        → $0.10/fl oz
+    #   alfredo sauce  ~$17 / 1-gal jug (premium dairy) → $0.13/fl oz
+    #   pesto sauce    ~$23 / 1-gal jug (oil + basil + cheese) → $0.18/fl oz
+    "pizza sauce":     {"value": 0.06, "unit": "fl oz"},
+    "marinara sauce":  {"value": 0.08, "unit": "fl oz"},
+    "salsa sauce":     {"value": 0.08, "unit": "fl oz"},
+    "bbq sauce":       {"value": 0.09, "unit": "fl oz"},
+    "buffalo sauce":   {"value": 0.09, "unit": "fl oz"},
+    "hot sauce":       {"value": 0.07, "unit": "fl oz"},
+    "ranch sauce":     {"value": 0.10, "unit": "fl oz"},
+    "alfredo sauce":   {"value": 0.13, "unit": "fl oz"},
+    "pesto sauce":     {"value": 0.18, "unit": "fl oz"},
+}
+
+
+def _lookup_ingredient_override(name: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Return the (value, unit) override for an ingredient name, or None.
+
+    Substring match — case-insensitive — against ``_INGREDIENT_OVERRIDES``
+    so variations like "Homemade Pizza Sauce" still hit the right entry.
+    Longest matching key wins so "alfredo sauce" beats "sauce" if we ever
+    add a generic entry.
+    """
+    if not name:
+        return None
+    low = name.lower().strip()
+    hits = [(k, v) for k, v in _INGREDIENT_OVERRIDES.items() if k in low]
+    if not hits:
+        return None
+    return max(hits, key=lambda kv: len(kv[0]))[1]
+
+
 def search_fdc_id(name: str) -> Optional[str]:
     """Return the top-ranked USDA FDC id for an ingredient name, or None.
 
@@ -191,7 +245,27 @@ def build_benchmarks(
                 out.append(record)
                 continue
 
-        # ── 2. Category estimate — gated on mass-compatible recipe unit ──────
+        # ── 2a. Per-ingredient override (named items not on AMS, not in lb) ──
+        # Pizza dough is sold by the ball, sauces by fluid ounce — neither
+        # passes the mass-unit gate below, so a name-keyed override lets us
+        # surface an honest industry estimate in the item's own unit.
+        override = _lookup_ingredient_override(name)
+        if override is not None:
+            v = float(override["value"])
+            u = override["unit"]
+            cat_tag = (name or "").lower().strip() or (cat.lower() if cat else "estimate")
+            record.update({
+                "source": "category",
+                "value": v,
+                "unit": u,
+                "label": f"~${v:.2f}/{u} (industry est, {cat_tag})",
+                "benchmark_per_lb": None,
+                "category": cat_tag,
+            })
+            out.append(record)
+            continue
+
+        # ── 2b. Category estimate — gated on mass-compatible recipe unit ─────
         # For fl oz / each / cup / etc. a $/lb number is more misleading than
         # helpful; render as "—" instead.
         if cat and cat in _CATEGORY_BENCHMARK_PER_LB and recipe_unit in _MASS_UNITS:

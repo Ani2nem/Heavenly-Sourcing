@@ -542,9 +542,54 @@ def get_upload_status(job_id: str):
     }
 
 
+def _industry_estimate(ing: Ingredient) -> Optional[Dict[str, Any]]:
+    """Category-based industry-estimate fallback for the recipes page.
+
+    Returns ``None`` unless ``build_benchmarks`` produces a category-tier
+    record for this ingredient — i.e. the recipe unit is mass-compatible
+    AND there's a category midpoint in ``_CATEGORY_BENCHMARK_PER_LB``.
+    Passing ``session=None`` forces ``build_benchmarks`` to skip the real
+    AMS tier (the recipes page already gets that via
+    ``summarize_ingredient_prices``); we only want the fallback here.
+
+    The label string is the same ``~$X.XX/lb (industry est, <cat>)`` the
+    RFP "Reference Benchmark" column has been rendering all along, so the
+    frontend doesn't have to re-format anything.
+    """
+    from services.usda_client import build_benchmarks
+
+    records = build_benchmarks(
+        [{
+            "name": ing.name,
+            "category": ing.category,
+            "unit": ing.culinary_unit,
+        }],
+        session=None,
+    )
+    if not records or records[0].get("source") != "category":
+        return None
+    rec = records[0]
+    return {
+        "value": rec.get("value"),
+        "unit": rec.get("unit"),
+        "label": rec.get("label"),
+        "category": rec.get("category"),
+        "source": "industry_est",
+    }
+
+
 @router.get("/menu/recipes/with-prices")
 def get_recipes_with_prices(session: Session = Depends(get_session)):
-    """Recipes plus a small USDA AMS price summary per ingredient."""
+    """Recipes plus a per-ingredient USDA AMS price summary, with a
+    category-based industry-estimate fallback when AMS has no data.
+
+    Response shape per ingredient:
+      ``usda_price``    — real AMS data (``has_data`` true/false, series, latest, avg).
+      ``usda_estimate`` — present only when ``usda_price.has_data`` is false
+                          AND a category midpoint applies. Carries a
+                          pre-formatted ``label`` such as
+                          ``~$4.50/lb (industry est, dairy)``.
+    """
     from services.ams_pricing import summarize_ingredient_prices
 
     profile = session.exec(select(RestaurantProfile)).first()
@@ -563,12 +608,19 @@ def get_recipes_with_prices(session: Session = Depends(get_session)):
     ).all()
 
     summary_cache: Dict[str, Dict[str, Any]] = {}
+    estimate_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     def _summary(ing_id) -> Dict[str, Any]:
         key = str(ing_id)
         if key not in summary_cache:
             summary_cache[key] = summarize_ingredient_prices(session, ing_id)
         return summary_cache[key]
+
+    def _estimate(ing: Ingredient) -> Optional[Dict[str, Any]]:
+        key = str(ing.id)
+        if key not in estimate_cache:
+            estimate_cache[key] = _industry_estimate(ing)
+        return estimate_cache[key]
 
     result: list = []
     for dish in dishes:
@@ -581,6 +633,10 @@ def get_recipes_with_prices(session: Session = Depends(get_session)):
                 ing = session.get(Ingredient, ri.ingredient_id)
                 if not ing:
                     continue
+                price = _summary(ing.id)
+                # Only attach the industry estimate when AMS has nothing,
+                # so the frontend can pick whichever it sees.
+                estimate = None if price.get("has_data") else _estimate(ing)
                 ingredients.append({
                     "recipe_ingredient_id": str(ri.id),
                     "ingredient_id": str(ing.id),
@@ -590,7 +646,8 @@ def get_recipes_with_prices(session: Session = Depends(get_session)):
                     "category": ing.category,
                     "shelf_life_days": ing.shelf_life_days,
                     "usda_fdc_id": ing.usda_fdc_id,
-                    "usda_price": _summary(ing.id),
+                    "usda_price": price,
+                    "usda_estimate": estimate,
                 })
         result.append({
             "dish_id": str(dish.id),
@@ -728,6 +785,8 @@ def _serialize_recipe_ingredient(
     ing = session.get(Ingredient, ri.ingredient_id)
     if not ing:
         raise HTTPException(status_code=404, detail="Ingredient not found")
+    price = summarize_ingredient_prices(session, ing.id)
+    estimate = None if price.get("has_data") else _industry_estimate(ing)
     return {
         "recipe_ingredient_id": str(ri.id),
         "ingredient_id": str(ing.id),
@@ -737,7 +796,8 @@ def _serialize_recipe_ingredient(
         "category": ing.category,
         "shelf_life_days": ing.shelf_life_days,
         "usda_fdc_id": ing.usda_fdc_id,
-        "usda_price": summarize_ingredient_prices(session, ing.id),
+        "usda_price": price,
+        "usda_estimate": estimate,
     }
 
 

@@ -341,7 +341,7 @@ function IngredientRow({ ing, onSave, onDelete }) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <PriceBadge summary={price} />
+          <PriceBadge summary={price} estimate={ing.usda_estimate} />
           <button
             type="button"
             onClick={startEdit}
@@ -486,21 +486,40 @@ function formatQty(q) {
   return s.replace(/\.?0+$/, '')
 }
 
-function PriceBadge({ summary }) {
-  if (!summary || !summary.has_data) {
-    return <span className="text-xs text-slate-400">no USDA data</span>
+function PriceBadge({ summary, estimate }) {
+  // Tier 1 — real USDA AMS Market News data.
+  if (summary && summary.has_data) {
+    const latest = summary.latest?.midpoint
+    const fmt = v => v != null ? `$${v.toFixed(2)}/${summary.unit || 'lb'}` : '—'
+    return (
+      <span className="text-xs text-slate-600">
+        {fmt(latest)}
+        {summary.avg != null && (
+          <span className="text-slate-400"> · avg {fmt(summary.avg)}</span>
+        )}
+        <span className="ml-1 text-[10px] text-emerald-700">USDA</span>
+      </span>
+    )
   }
-  const latest = summary.latest?.midpoint
-  const fmt = v => v != null ? `$${v.toFixed(2)}/${summary.unit || 'lb'}` : '—'
-  return (
-    <span className="text-xs text-slate-600">
-      {fmt(latest)}
-      {summary.avg != null && (
-        <span className="text-slate-400"> · avg {fmt(summary.avg)}</span>
-      )}
-      <span className="ml-1 text-[10px] text-emerald-700">USDA</span>
-    </span>
-  )
+  // Tier 2 — industry-estimate fallback (category midpoint, mass units only).
+  // Visually distinct from real USDA so the user can't mistake one for the
+  // other: amber colour + leading "~" + "industry est" tag.
+  if (estimate && estimate.value != null) {
+    const v = Number(estimate.value)
+    const unit = estimate.unit || 'lb'
+    const cat = estimate.category ? estimate.category.toLowerCase() : 'category'
+    return (
+      <span
+        className="text-xs text-amber-700"
+        title="No USDA AMS Market News data for this ingredient — falling back to a static category midpoint. Not USDA-sourced."
+      >
+        ~${v.toFixed(2)}/{unit}
+        <span className="ml-1 text-[10px] text-amber-600">industry est · {cat}</span>
+      </span>
+    )
+  }
+  // Tier 3 — no signal at all.
+  return <span className="text-xs text-slate-400">no USDA data</span>
 }
 
 function Sparkline({ points }) {

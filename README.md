@@ -201,10 +201,31 @@ parallel up to 8 at a time. If a response truncates or returns malformed JSON,
 output, and `_parse_menu_text_with_autosplit` recursively bisects the chunk and
 retries — no silent data loss.
 
-**Honest USDA labelling.** `build_benchmarks` resolves prices in 3 tiers:
-1. real USDA AMS Market News (`(USDA AMS, May 04)`),
-2. industry estimates *only* when the recipe unit is mass-compatible (`(industry est)`),
-3. `—` otherwise. We never tag an industry estimate as "USDA."
+**Honest USDA labelling.** `build_benchmarks` resolves prices in 3 tiers and
+the **same tiering is now surfaced on the Recipes page**, not just inside RFP
+emails:
+1. real USDA AMS Market News — green `USDA` badge, `$X.XX/lb · avg $Y.YY/lb`,
+   sparkline if there are ≥2 historical points.
+2. industry estimates — amber `industry est · <tag>` badge, `~$X.XX/<unit>`.
+   Resolved in two passes:
+     a. **Per-ingredient override** — name-keyed table (`_INGREDIENT_OVERRIDES`)
+        for high-volume items whose natural unit isn't mass-based, e.g.
+        Pizza Dough `$0.60/each`, Pizza Sauce `$0.06/fl oz`, BBQ / Ranch /
+        Alfredo Sauce `$0.09–0.13/fl oz`. Substring-matched, longest key wins.
+     b. **Category midpoint** — 8 hard-coded `$/lb` averages
+        (`_CATEGORY_BENCHMARK_PER_LB`, e.g. Dairy $4.50, Proteins $6.00,
+        Produce $2.50). Fires only when the recipe unit is mass-compatible
+        (`lb / oz / g / kg`) so a $/lb number never appears next to fl-oz
+        sauces or per-each items.
+   Both passes are NOT USDA-sourced — the badge color and `~` prefix make
+   this visually unambiguous, and the rendered label carries an explicit
+   `(industry est, <tag>)` suffix.
+3. `no USDA data` — slate grey, no number. Used for fl-oz sauces / each-unit
+   bottles where a $/lb estimate would be more misleading than helpful.
+
+The API response carries them in two separate fields so the frontend can
+choose which to render: `usda_price` (tier 1, with series + latest + avg)
+and `usda_estimate` (tier 2, only populated when tier 1 is empty).
 
 **AMS report extraction quirks.** `services/ams_pricing.py` papers over three
 real things AMS does that aren't documented:
