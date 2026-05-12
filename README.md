@@ -62,7 +62,7 @@ graceful fallbacks for missing USDA data.
 | Step | What it does | Key files | DB tables |
 |---|---|---|---|
 | **1. Menu → Recipes** | Extract text via PyMuPDF (no OCR), batch through GPT-4o-mini in parallel, recursive bisection retry on truncated JSON, canonicalize units. | `agents/menu_parser.py`, `agents/ingredient_units.py`, `api/menu.py` | `menus`, `dishes`, `recipes`, `ingredients`, `recipe_ingredients` |
-| **2. USDA Pricing Trends** | POST to FDC `/foods/search` for stable food IDs; discover the right AMS report slug for each commodity; store every weekly price observation. Sparkline + latest/avg badge surfaced on the recipes screen. | `services/usda_client.py`, `services/ams_pricing.py`, `api/admin.py` | `ingredients.usda_fdc_id`, `ingredient_prices` |
+| **2. USDA Pricing Trends** | POST to FDC `/foods/search` for stable food IDs; discover the right AMS report slug per commodity, follow multi-section reports into the right sub-section, drop discontinued slugs, normalise per-package and cents-denominated prices to honest $/lb. Sparkline + latest/avg badge surfaced on the recipes screen. | `services/usda_client.py`, `services/ams_pricing.py`, `api/admin.py` | `ingredients.usda_fdc_id`, `ingredient_prices` |
 | **3. Find Local Distributors** | Google Places API (New) with progressive radius rings (10→20→30→50 mi) until ≥6 vendors found, deduped by name, persisted. | `services/places_discovery.py`, `api/procurement.py::_background_procurement` | `distributors`, `procurement_cycles` |
 | **4. Send RFP Emails** | Real SMTP. HTML table with `Recipe Need · Order This · Delivery Window · Reference Benchmark` columns. Pack-aware quantities (`#10 can`, `5-lb bag`). Plus-addressed routing so demo replies all land in one Gmail. | `services/email_daemon.py::send_rfp_email`, `services/pack_inference.py`, `services/usda_client.py::build_benchmarks` | `distributor_quotes`, `cycle_ingredients_needed` |
 | **5. Collect & Compare** | IMAP poller every 30s. GPT-4o parses replies into structured prices. Per-ingredient comparison matrix. Auto-trigger price-match emails to losing vendors when all RFPs are in. Multi-vendor optimal-cart approval. Decline detection ("out of stock"). Order history with per-vendor PO breakdown + invoice request. | `services/email_daemon.py`, `agents/scoring_engine.py`, `api/procurement.py` | `distributor_quote_items`, `purchase_receipts`, `notifications` |
@@ -155,8 +155,9 @@ All endpoints live under `/api`.
 - `POST /purchase-history/{cycle_id}/vendors/{distributor_id}/request-receipt` — chase up missing invoice
 
 ### Admin / diagnostics
-- `GET  /admin/usda/coverage` — counts of ingredients with FDC IDs / price rows
+- `GET  /admin/usda/coverage` — counts of ingredients with FDC IDs / price rows + samples of unmapped / mapped-but-empty names
 - `POST /admin/usda/backfill` — retry USDA enrichment for any NULL ingredients (`{"force": false, "background": false}`)
+- `POST /admin/usda/reset-caches` — drop in-memory AMS report / slug / negative caches so the next backfill rediscovers from scratch
 
 ### Other
 - `GET/POST /profile` — restaurant profile
@@ -204,6 +205,34 @@ retries — no silent data loss.
 1. real USDA AMS Market News (`(USDA AMS, May 04)`),
 2. industry estimates *only* when the recipe unit is mass-compatible (`(industry est)`),
 3. `—` otherwise. We never tag an industry estimate as "USDA."
+
+**AMS report extraction quirks.** `services/ams_pricing.py` papers over three
+real things AMS does that aren't documented:
+
+1. *Multi-section reports.* The bare `/reports/{slug}` URL returns only the
+   `Report Header` rows for everything outside the dairy slugs 1082–1085 /
+   1092 — no commodity, no price. The actual price rows live in a sibling
+   section whose name varies by family (`Report Details`, `Report Detail`,
+   `Report Detail Simple`, `Report Metrics`, …). `_fetch_report_body`
+   inspects `reportSections`, ranks the non-header sections (detail → price
+   → metric → volume), and refetches the first one that carries price
+   columns. It also appends `lastDays=30` because AMS *ignores* `limit` on
+   section endpoints — an un-filtered Atlanta Vegetables fetch is 124 MB.
+2. *Discontinued reports float to the top.* AMS leaves dead reports in the
+   listing with `(Discontinued)` in the title. Those scored higher than the
+   active equivalents for produce keywords (`wholesale` bonus) and filled
+   the entire 20-slot candidate cap. `_candidate_reports_for` now drops
+   anything whose blob contains `discontinued`.
+3. *Three different price denominations.* Dairy quotes `Dollars per Pound`.
+   Poultry / eggs quote `Cents Per Lb` / `Cents Per Dozen`. Terminal Markets
+   quote per package with no unit field at all (`5 kg/11 lb flats`,
+   `40 lb cartons`, `1 1/9 bushel cartons`). `_extract_rows` detects each
+   case — converts cents → dollars, parses pounds out of `package` (with
+   commodity-specific bushel fallbacks), and *drops* rows whose package
+   weight is unrecoverable rather than storing a wrong-by-10× $/lb.
+   `unit_override` on the extracted row forces the storage unit to `lb`
+   whenever a per-package divisor was applied, so the UI never shows
+   `$2.71/each` for a per-30-lb-carton pineapple price.
 
 **Pack inference.** `services/pack_inference.py` translates "10 fl oz of pizza
 sauce" into "1 #10 can (~104 fl oz)" before sending the RFP, so vendors quote

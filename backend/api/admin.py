@@ -127,23 +127,54 @@ def admin_usda_backfill(
 
 @router.get("/admin/usda/coverage")
 def admin_usda_coverage(session: Session = Depends(get_session)):
-    """Quick read-only summary of how much USDA data we actually have."""
+    """Quick read-only summary of how much USDA data we actually have.
+
+    Surfaces a sample of ``unmapped`` ingredient names (no AMS mapping) and
+    ``mapped_no_prices`` ingredient names (mapping exists but discovery hasn't
+    stored any rows yet) so it's easy to see where the gaps are.
+    """
     from services.ams_pricing import find_mapping_for
 
     ings: List[Ingredient] = session.exec(select(Ingredient)).all()
     total = len(ings)
     with_fdc = sum(1 for i in ings if i.usda_fdc_id)
-    with_ams_mapping = sum(1 for i in ings if find_mapping_for(i.name))
     price_rows = session.exec(select(IngredientPrice)).all()
-    by_ing = {}
+    by_ing: Dict[Any, int] = {}
     for p in price_rows:
         by_ing.setdefault(p.ingredient_id, 0)
         by_ing[p.ingredient_id] += 1
-    with_prices = len(by_ing)
+
+    with_ams_mapping = 0
+    unmapped: List[str] = []
+    mapped_no_prices: List[str] = []
+    for i in ings:
+        mapping = find_mapping_for(i.name)
+        if mapping:
+            with_ams_mapping += 1
+            if i.id not in by_ing:
+                mapped_no_prices.append(i.name)
+        else:
+            unmapped.append(i.name)
+
     return {
         "ingredients_total": total,
         "ingredients_with_fdc_id": with_fdc,
         "ingredients_with_ams_mapping": with_ams_mapping,
-        "ingredients_with_price_rows": with_prices,
+        "ingredients_with_price_rows": len(by_ing),
         "total_price_rows": len(price_rows),
+        "unmapped_sample": sorted(set(unmapped))[:50],
+        "mapped_no_prices_sample": sorted(set(mapped_no_prices))[:50],
     }
+
+
+@router.post("/admin/usda/reset-caches")
+def admin_usda_reset_caches():
+    """Clear in-memory AMS caches (report list, slug map, negative cache).
+
+    Useful after expanding ``INGREDIENT_TO_AMS`` or fixing a bad slug
+    discovery without restarting the API process.
+    """
+    from services.ams_pricing import reset_caches
+
+    cleared = reset_caches()
+    return {"ok": True, "cleared": cleared}
