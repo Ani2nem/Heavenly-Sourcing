@@ -21,7 +21,12 @@ export default function RecipeAccordion() {
       .then(res => {
         setDishes(res.data)
         const initial = {}
-        res.data.forEach(d => { initial[d.dish_id] = forecasts[d.dish_id] ?? 0 })
+        // Preserve in-session typing if any; otherwise pre-fill with last
+        // cycle's forecast so the manager only has to update what changed.
+        // Fresh uploads have no history → last_forecast is null → 0.
+        res.data.forEach(d => {
+          initial[d.dish_id] = forecasts[d.dish_id] ?? d.last_forecast ?? 0
+        })
         setForecasts(initial)
       })
       .catch(() => toast.error('Could not load recipes'))
@@ -168,6 +173,14 @@ export default function RecipeAccordion() {
                 )}
               </div>
               <div className="flex items-center gap-3">
+                {dish.last_forecast != null && dish.last_forecast > 0 && (
+                  <span
+                    className="text-[10px] text-slate-400 whitespace-nowrap tabular-nums"
+                    title="Pre-filled from your most recent procurement cycle. Edit to change."
+                  >
+                    last: {dish.last_forecast}
+                  </span>
+                )}
                 <input
                   type="number"
                   min="0"

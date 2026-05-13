@@ -10,7 +10,16 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database import get_session
-from models import Dish, Ingredient, Menu, Recipe, RecipeIngredient, RestaurantProfile
+from models import (
+    CycleDishForecast,
+    Dish,
+    Ingredient,
+    Menu,
+    ProcurementCycle,
+    Recipe,
+    RecipeIngredient,
+    RestaurantProfile,
+)
 
 router = APIRouter(tags=["menu"])
 
@@ -607,6 +616,30 @@ def get_recipes_with_prices(session: Session = Depends(get_session)):
         select(Dish).where(Dish.menu_id == latest_menu.id, Dish.is_active == True)
     ).all()
 
+    # Most-recent forecast per dish across all of this restaurant's cycles.
+    # Pre-fills the procurement page's portion inputs so the manager only
+    # has to tweak what changed, not retype everything. Re-uploads create
+    # fresh Dish UUIDs, so a brand-new menu naturally has no history and
+    # falls back to 0 — matching the "re-upload resets" expectation.
+    last_forecast_by_dish: Dict[str, int] = {}
+    dish_ids = [d.id for d in dishes]
+    if dish_ids:
+        forecasts_for_restaurant = session.exec(
+            select(CycleDishForecast)
+            .join(
+                ProcurementCycle,
+                ProcurementCycle.id == CycleDishForecast.procurement_cycle_id,
+            )
+            .where(ProcurementCycle.restaurant_profile_id == profile.id)
+            .where(CycleDishForecast.dish_id.in_(dish_ids))
+            .order_by(ProcurementCycle.created_at.desc())
+        ).all()
+        for cdf in forecasts_for_restaurant:
+            key = str(cdf.dish_id)
+            # First hit wins because we ordered DESC by cycle.created_at.
+            if key not in last_forecast_by_dish:
+                last_forecast_by_dish[key] = int(cdf.forecasted_quantity or 0)
+
     summary_cache: Dict[str, Dict[str, Any]] = {}
     estimate_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
@@ -654,6 +687,9 @@ def get_recipes_with_prices(session: Session = Depends(get_session)):
             "name": dish.name,
             "base_price": dish.base_price,
             "ingredients": ingredients,
+            # Pre-fill source for the procurement page's portion inputs. None
+            # when this dish has never been procured (e.g. fresh upload).
+            "last_forecast": last_forecast_by_dish.get(str(dish.id)),
         })
 
     return result
