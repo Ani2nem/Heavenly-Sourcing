@@ -763,19 +763,24 @@ def _upsert_quote_item(session, quote_id, ingredient_id, price: Optional[float])
 
 
 def _autotrigger_price_match(session, cycle_id) -> int:
-    """Bargain with vendors AFTER every outstanding RFP has come back.
+    """Bargain with vendors who are losing on items where a peer came in lower.
 
     Gating rules (in order):
       1. Need at least 2 RECEIVED quotes (otherwise nothing to compare).
-      2. No quotes still PENDING / FOLLOW_UP_SENT (otherwise we'd be bargaining
-         on an incomplete picture — exactly the bug the user complained about).
-      3. Each vendor gets at most ONE bargain email per cycle (dedupe by
-         ``(cycle_id, distributor_id)``). Their reply lowers prices in place;
-         a single bargaining round is enough.
+      2. Each vendor gets at most ONE bargain email per cycle (dedupe by
+         ``(cycle_id, distributor_id)``). A single bargaining round per
+         vendor is enough; their reply lowers prices in place.
+
+    We deliberately do NOT wait for every vendor to reply before bargaining.
+    In a 6-vendor RFP it's normal for 1-2 vendors to never respond, which
+    would otherwise leave bargaining permanently disabled. Bargaining each
+    time a new RECEIVED quote arrives is safe because (a) it only ever
+    *lowers* a winner's price (the loser is being asked to match), and
+    (b) the per-vendor dedupe means no one gets spammed.
 
     For each eligible vendor we compute:
       * winning_items — ingredients where this vendor is already the cheapest
-                        (we WILL order these from them today).
+                        among RECEIVED quotes (we WILL order these from them).
       * losing_items  — ingredients where another vendor came in lower
                         (we ask them to match the target price).
 
@@ -801,10 +806,9 @@ def _autotrigger_price_match(session, cycle_id) -> int:
         return 0
     if pending:
         print(
-            f"[bargain] skipping — {len(pending)} vendor(s) still owe a quote; "
-            "waiting for full picture before bargaining"
+            f"[bargain] proceeding with {len(received)} RECEIVED quote(s); "
+            f"{len(pending)} vendor(s) still pending — bargaining on what we have"
         )
-        return 0
 
     # Build (ingredient_id -> [(distributor_id, quote_id, price)])
     items_by_ing: Dict[Any, List[Any]] = {}
@@ -976,19 +980,19 @@ def _process_quote_reply(session, quote_id: str, body: str, dist) -> None:
     quote.received_at = datetime.utcnow()
     session.add(quote)
 
+    # Gaps mean the vendor replied but couldn't supply specific items
+    # (e.g. "Tomato — not available"). DO NOT auto-fire the chase-up email
+    # in that case: send_followup_email's body says "we have not yet
+    # received your pricing reply", which is plainly wrong for a vendor
+    # who DID reply — they just can't carry one SKU. The gap is already
+    # surfaced in the comparison matrix and the notification below, so
+    # the operator can decide whether to ping them or just source it
+    # elsewhere. Bargaining (a different email) still fires below.
     gaps = parsed.get("gaps") or []
     if gaps and dist:
-        try:
-            send_followup_email(
-                to_email=dist.demo_routing_email or "",
-                distributor_name=dist.name,
-                cycle_id=str(quote.procurement_cycle_id),
-                quote_id=str(quote.id),
-            )
-        except Exception:
-            pass
         notif_msg = (
-            f"Quote from {dist.name} received. Missing: {', '.join(gaps)}. Follow-up sent."
+            f"Quote from {dist.name} received. Missing: {', '.join(gaps)}. "
+            "No auto-email sent — review and source elsewhere if needed."
         )
     else:
         notif_msg = f"Quote received from {dist.name if dist else 'vendor'}. Total: ${total:.2f}."
@@ -1098,17 +1102,53 @@ def _process_receipt_reply(
         raw_email_excerpt=body[:1000],
     )
     session.add(receipt)
+    session.flush()  # so the receipt counts in the "do all POs have invoices?" query below
 
-    cycle.status = "COMPLETED"
-    session.add(cycle)
+    # Only flip the cycle to COMPLETED once EVERY APPROVED PO on this cycle
+    # has at least one PurchaseReceipt. Multi-vendor split orders generate
+    # several POs; receiving one invoice doesn't mean we're done. We compare
+    # the set of approved distributor_ids against the set of distributors
+    # that have a receipt — if there's any approved vendor without a
+    # receipt yet, the cycle stays AWAITING_RECEIPT.
+    approved_dist_ids = {
+        q.distributor_id for q in session.exec(
+            select(DistributorQuote)
+            .where(DistributorQuote.procurement_cycle_id == cycle.id)
+            .where(DistributorQuote.quote_status == "APPROVED")
+        ).all()
+    }
+    receipted_dist_ids = {
+        r.distributor_id for r in session.exec(
+            select(PurchaseReceipt)
+            .where(PurchaseReceipt.procurement_cycle_id == cycle.id)
+        ).all()
+    }
+    if approved_dist_ids and approved_dist_ids.issubset(receipted_dist_ids):
+        cycle.status = "COMPLETED"
+        session.add(cycle)
+        cycle_done = True
+    else:
+        cycle_done = False
+        outstanding = approved_dist_ids - receipted_dist_ids
+        print(
+            f"[imap] cycle {str(cycle.id)[:8]} still AWAITING_RECEIPT — "
+            f"{len(outstanding)}/{len(approved_dist_ids)} vendor(s) owe an invoice"
+        )
 
+    vendor_label = dist.name if dist else "vendor"
     notif_msg = (
-        f"Receipt received from {dist.name if dist else 'vendor'} for cycle {str(cycle.id)[:8]}…"
+        f"Receipt received from {vendor_label} for cycle {str(cycle.id)[:8]}…"
         + (f" total ${receipt.total_amount:.2f}" if receipt.total_amount is not None else "")
     )
+    if not cycle_done and approved_dist_ids:
+        outstanding_count = len(approved_dist_ids - receipted_dist_ids)
+        notif_msg += (
+            f" — {outstanding_count} more invoice"
+            f"{'s' if outstanding_count != 1 else ''} pending."
+        )
     session.add(Notification(title="Receipt Received", message=notif_msg))
     session.commit()
-    print(f"[imap] processed receipt for {dist.name if dist else 'vendor'} (po_id={po_id})")
+    print(f"[imap] processed receipt for {vendor_label} (po_id={po_id}) cycle_done={cycle_done}")
 
 
 # ─── IMAP polling (sync) ─────────────────────────────────────────────────────

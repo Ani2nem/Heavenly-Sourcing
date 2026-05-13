@@ -868,6 +868,22 @@ def purchase_history(session: Session = Depends(get_session)):
             for r in receipts_raw
         ]
 
+        # Derive displayed status from actual receipt coverage rather than
+        # the stored cycle.status. Older builds of the email daemon flipped
+        # status to COMPLETED as soon as ANY receipt arrived, which is
+        # wrong on multi-vendor split orders — the cycle isn't really done
+        # until every APPROVED PO has a matching invoice. We compute the
+        # correct value at read time so existing cycles with a stale
+        # COMPLETED status still render as pending in the UI until their
+        # remaining invoices show up.
+        approved_dist_ids = {str(aq.distributor_id) for aq in approved_quotes}
+        receipted_dist_ids = {str(r.distributor_id) for r in receipts_raw}
+        display_status = (
+            "COMPLETED"
+            if approved_dist_ids and approved_dist_ids.issubset(receipted_dist_ids)
+            else "AWAITING_RECEIPT"
+        )
+
         results.append({
             "id": str(cycle.id),
             "vendors": per_vendor,
@@ -878,7 +894,7 @@ def purchase_history(session: Session = Depends(get_session)):
             ),
             "total_quoted_cost": round(grand_total, 2),
             "purchased_at": cycle.created_at.isoformat(),
-            "status": cycle.status,
+            "status": display_status,
             "receipts": receipts,
             # back-compat single-receipt shape (latest receipt)
             "receipt": receipts[0] if receipts else None,
@@ -967,12 +983,17 @@ def purchase_history_detail(
             continue
         dist = session.get(Distributor, q.distributor_id)
         won_items = []
-        for entry in cart["by_ingredient"].values():
+        # cart["by_ingredient"] is keyed by ingredient_id; the value dict only
+        # carries ingredient_name / winner / runner_up / spread / all_offers,
+        # NOT a redundant ingredient_id field. Iterate via items() so we can
+        # pass the id through to the frontend (used as the React key on the
+        # per-PO line-item table).
+        for ing_id, entry in cart["by_ingredient"].items():
             w = entry["winner"]
             if w["distributor_id"] != str(q.distributor_id):
                 continue
             won_items.append({
-                "ingredient_id": entry["ingredient_id"],
+                "ingredient_id": ing_id,
                 "ingredient_name": entry["ingredient_name"],
                 "unit_price": w["unit_price"],
             })
@@ -1012,7 +1033,7 @@ def purchase_history_detail(
             .where(CycleIngredientsNeeded.procurement_cycle_id == cycle.id)
         ).all()
     }
-    won_ing_ids = {entry["ingredient_id"] for entry in cart["by_ingredient"].values()}
+    won_ing_ids = set(cart["by_ingredient"].keys())
     unmatched = []
     for ing_id in (needed_ing_ids - won_ing_ids):
         ing = session.get(Ingredient, uuid.UUID(ing_id))
