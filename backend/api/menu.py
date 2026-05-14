@@ -248,6 +248,19 @@ def _save_dishes_to_db(dishes: list, confidence_score: float, profile_id: str) -
                     "ingredients": dish_ingredients,
                 })
 
+            # Advance onboarding state — a successful menu parse is the
+            # final step of the wizard. We only do this when the profile
+            # is in NEEDS_MENU (so re-parsing later doesn't accidentally
+            # bump someone from COMPLETED back to NEEDS_MENU and so on).
+            profile = session.exec(
+                select(RestaurantProfile).where(RestaurantProfile.id == pid)
+            ).first()
+            if profile and profile.onboarding_state in (
+                "NEEDS_PROFILE", "NEEDS_CONTRACTS", "NEEDS_MENU"
+            ):
+                profile.onboarding_state = "COMPLETED"
+                session.add(profile)
+
             session.commit()
             return {
                 "menu_id": str(menu.id),

@@ -11,10 +11,36 @@ class RestaurantProfile(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str
-    zip_code: str
-    city: str
-    state: str
+
+    # Location is now OPTIONAL. The product is contract-led; location is only
+    # used as a fallback signal for the legacy Places-based discovery flow and
+    # for the (future) "emergency buy at local Walmart" path. Onboarding no
+    # longer forces the user to type a zip+city+state before they can upload
+    # a contract.
+    zip_code: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+
     email: str
+
+    # Optional cellphone for the contract-decision SMS alert path (Phase 6).
+    # We render UI affordances around it regardless so the manager can opt in
+    # early, but the SMS sender no-ops gracefully when this is NULL.
+    phone_number: Optional[str] = None
+
+    # Opt-in for Phase 6 actionable SMS (Twilio). Requires phone_number +
+    # env Twilio credentials.
+    sms_alerts_opt_in: bool = Field(default=False)
+
+    # State machine for the onboarding wizard so the frontend has a single
+    # source of truth for "where should I send this user next?". Values:
+    #   NEEDS_PROFILE         — no profile row exists yet
+    #   NEEDS_CONTRACTS       — profile exists, no contracts uploaded or skipped
+    #   NEEDS_MENU            — contracts step done (uploaded OR explicitly
+    #                           skipped), menu not yet parsed
+    #   COMPLETED             — menu parsed; full dashboard available
+    onboarding_state: str = Field(default="NEEDS_CONTRACTS")
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

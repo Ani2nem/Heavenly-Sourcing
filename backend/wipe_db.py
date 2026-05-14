@@ -6,6 +6,17 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 TABLES = [
+    # ── Phase-2 contract pivot tables (drop children first to avoid FK pain) ──
+    "manager_alerts",
+    "negotiation_rounds",
+    "negotiations",
+    "contract_documents",
+    "contract_line_items",
+    "contracts",
+    "vendor_trust_scores",
+    "vendor_restaurant_links",
+    "vendors",
+    # ── Legacy weekly-RFP tables ─────────────────────────────────────────────
     "purchase_receipts",
     "distributor_quote_items",
     "distributor_quotes",

@@ -15,6 +15,8 @@ export default function RecipeAccordion() {
   const [forecasts, setForecasts] = useState({})
   const [expanded, setExpanded] = useState({})
   const [loading, setLoading] = useState(false)
+  const [contractsList, setContractsList] = useState([])
+  const [linkedContractId, setLinkedContractId] = useState('')
 
   const loadRecipes = () => {
     apiClient.get('/api/menu/recipes/with-prices')
@@ -34,6 +36,9 @@ export default function RecipeAccordion() {
 
   useEffect(() => {
     loadRecipes()
+    apiClient.get('/api/contracts').then((res) => {
+      setContractsList(res.data || [])
+    }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -124,9 +129,9 @@ export default function RecipeAccordion() {
     }
     setLoading(true)
     try {
-      await apiClient.post('/api/procurement/cycle/initiate', {
-        dish_forecasts,
-      })
+      const body = { dish_forecasts }
+      if (linkedContractId) body.contract_id = linkedContractId
+      await apiClient.post('/api/procurement/cycle/initiate', body)
       toast.success('Cycle started — dispatching RFPs…')
       navigate('/quotes')
     } catch (err) {
@@ -224,6 +229,24 @@ export default function RecipeAccordion() {
             )}
           </div>
         ))}
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-xs font-medium text-slate-600 mb-1">
+          Link to contract (optional)
+        </label>
+        <select
+          value={linkedContractId}
+          onChange={(e) => setLinkedContractId(e.target.value)}
+          className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm bg-white"
+        >
+          <option value="">— Weekly spot buy (no contract anchor) —</option>
+          {contractsList.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.nickname} ({c.status})
+            </option>
+          ))}
+        </select>
       </div>
 
       <button

@@ -61,3 +61,11 @@ class PurchaseReceipt(SQLModel, table=True):
     raw_email_subject: Optional[str] = None
     raw_email_excerpt: Optional[str] = None
     received_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Origin of the spend so analytics don't comingle contract wholesale
+    # with emergency retail buys. Values:
+    #   CONTRACT       — fulfilled under an active long-term contract
+    #   WEEKLY_RFP     — legacy weekly spot quote (current default)
+    #   EMERGENCY_BUY  — manager ran to a retail store for an out-of-stock
+    #   MANUAL_ENTRY   — manager keyed in a receipt after the fact
+    acquisition_channel: str = Field(default="WEEKLY_RFP")

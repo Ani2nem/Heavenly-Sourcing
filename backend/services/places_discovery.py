@@ -42,6 +42,10 @@ GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 JINA_BASE = "https://r.jina.ai/"
 
 MAX_DISTRIBUTORS = 6
+
+# Contract renewal competitor discovery — intentionally smaller than weekly
+# RFP discovery so the demo doesn't sprawl (product decision from pivot doc).
+MAX_CONTRACT_COMPETITORS = 4
 RADIUS_RINGS_M: List[int] = [
     16_093,   # 10 miles
     32_187,   # 20 miles
@@ -334,3 +338,19 @@ def discover_distributors(profile: RestaurantProfile, session: Session) -> List[
         created.append(dist)
     session.flush()
     return created
+
+
+def fetch_places_near_zip(zip_code: str, max_places: int = MAX_CONTRACT_COMPETITORS) -> List[Dict[str, Any]]:
+    """Return up to ``max_places`` distributor-shaped Place dicts near ``zip_code``.
+
+    Does **not** persist anything — used by the Phase 3 contract lifecycle
+    agent to spin up ``Vendor`` rows for competitor RFPs without coupling to
+    the legacy ``Distributor`` weekly-RFP flow.
+
+    Returns the same shape ``discover_distributors`` consumes internally:
+    ``displayName``, ``formattedAddress``, ``types``, ``websiteUri``, ``id``.
+    """
+    if not settings.google_places_api_key or not (zip_code or "").strip():
+        return []
+    places = _aggregate_places(zip_code.strip())
+    return places[: max(0, int(max_places))]

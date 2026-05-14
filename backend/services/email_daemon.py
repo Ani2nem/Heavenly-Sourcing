@@ -27,6 +27,7 @@ from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional, Tuple
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from openai import OpenAI
 from sqlmodel import select
 
@@ -94,11 +95,43 @@ Return ONLY valid JSON — no markdown, no preamble.
 Be permissive: if any field is missing in the email, set it to null instead of guessing.
 """
 
+CONTRACT_REPLY_PARSE_SYSTEM = """\
+You read an email reply from a wholesale vendor responding to a restaurant contract renewal or exploratory RFP.
+Return ONLY valid JSON — no markdown, no preamble.
+
+{
+  "summary": "string — one paragraph",
+  "pricing_items": [
+    {
+      "label": "string",
+      "price_numeric": float|null,
+      "price_low": float|null,
+      "price_high": float|null,
+      "unit": "string|null",
+      "notes": "string|null"
+    }
+  ],
+  "term_months": int|null,
+  "firm_commitment_detected": false,
+  "confidence": "high|medium|low"
+}
+
+Rules:
+- Ignore quoted thread history when judging vendor-authored content (the excerpt may already be truncated).
+- firm_commitment_detected=true only if they quote a single final binding price without hedges like \"approximately\", \"indicative\", or \"subject to approval\".
+- Prefer price_numeric when present; else use midpoint of price_low and price_high when both are numbers.
+- If no usable numeric anchors exist, use pricing_items=[].
+"""
+
 
 # ─── Reference helpers ────────────────────────────────────────────────────────
 
 _QUOTE_REF_RE = re.compile(r"Cycle\s+([\w-]+)\s*/\s*Quote\s+([\w-]+)", re.I)
 _PO_REF_RE = re.compile(r"Cycle\s+([\w-]+)\s*/\s*PO\s+([\w-]+)", re.I)
+_CONTRACT_NEG_REF_RE = re.compile(
+    r"Contract\s+([\w-]{8,})\s*/\s*Negotiation\s+([\w-]{8,})",
+    re.I,
+)
 _RECEIPT_HINTS = (
     "receipt",
     "invoice",
@@ -122,6 +155,13 @@ def _extract_po_ref(subject: str, body: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _extract_contract_neg_ref(subject: str, body: str) -> Optional[Tuple[str, str]]:
+    m = _CONTRACT_NEG_REF_RE.search(f"{subject}\n{body}")
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
 def _looks_like_receipt(subject: str, body: str) -> bool:
     haystack = (subject + "\n" + body).lower()
     return any(h in haystack for h in _RECEIPT_HINTS)
@@ -139,6 +179,9 @@ _OUTBOUND_SUBJECT_PREFIXES = (
     "purchase order confirmed",
     "price match request",
     "invoice request",
+    "renewal discussion",
+    "contract rfp",
+    "contract discussion",
 )
 
 
@@ -465,6 +508,11 @@ def _send_email(to_email: str, subject: str, html_body: str) -> None:
         print(f"[email] sent → {to_email}: {subject}")
     except Exception as exc:
         print(f"[email] send failed to {to_email}: {exc}")
+
+
+def send_html_email(to_email: str, subject: str, html_body: str) -> None:
+    """Public wrapper for HTML outbound mail (contract lifecycle, etc.)."""
+    _send_email(to_email, subject, html_body)
 
 
 def send_rfp_email(
@@ -1063,6 +1111,122 @@ def _process_quote_reply(session, quote_id: str, body: str, dist) -> None:
     print(f"[imap] processed quote reply for {dist.name if dist else 'vendor'} (quote_id={quote_id}) match_emails={n_matches}")
 
 
+def _avg_mid_from_contract_parsed(parsed: Dict[str, Any]) -> Optional[float]:
+    mids: List[float] = []
+    for item in parsed.get("pricing_items") or []:
+        if not isinstance(item, dict):
+            continue
+        pn = item.get("price_numeric")
+        if pn is not None:
+            try:
+                mids.append(float(pn))
+            except (TypeError, ValueError):
+                pass
+            continue
+        lo = item.get("price_low")
+        hi = item.get("price_high")
+        if lo is not None and hi is not None:
+            try:
+                mids.append((float(lo) + float(hi)) / 2.0)
+            except (TypeError, ValueError):
+                pass
+    if not mids:
+        return None
+    return sum(mids) / len(mids)
+
+
+def _process_contract_negotiation_reply(
+    session,
+    contract_id_str: str,
+    negotiation_id_str: str,
+    subject: str,
+    body: str,
+) -> None:
+    from models import Negotiation, NegotiationRound, Notification, Vendor
+
+    cid = _uuid_or_none(contract_id_str)
+    nid = _uuid_or_none(negotiation_id_str)
+    if not cid or not nid:
+        return
+
+    neg = session.get(Negotiation, nid)
+    if not neg or neg.contract_id != cid:
+        print(
+            f"[imap] contract negotiation ref mismatch contract_id={cid} negotiation_id={nid}"
+        )
+        return
+
+    fresh_body = _strip_quoted_history(body)
+    if fresh_body != body:
+        print(
+            f"[imap] stripped {len(body) - len(fresh_body)} chars of quoted "
+            "history before contract reply LLM extraction"
+        )
+
+    try:
+        parsed = _llm_extract(CONTRACT_REPLY_PARSE_SYSTEM, fresh_body)
+    except Exception as exc:
+        print(f"[imap] contract reply LLM parse failed: {exc}")
+        return
+
+    avg_mid = _avg_mid_from_contract_parsed(parsed)
+
+    prev_idxs = session.exec(
+        select(NegotiationRound.round_index).where(
+            NegotiationRound.negotiation_id == neg.id
+        )
+    ).all()
+    next_idx = max(prev_idxs, default=-1) + 1
+
+    firm = bool(parsed.get("firm_commitment_detected"))
+
+    offer_snapshot: Dict[str, Any] = {
+        "parsed": parsed,
+        "avg_quote_midpoint": avg_mid,
+        "firm_commitment_detected": firm,
+    }
+
+    session.add(
+        NegotiationRound(
+            negotiation_id=neg.id,
+            round_index=next_idx,
+            direction="INBOUND",
+            status="RECEIVED",
+            subject=subject[:512] if subject else None,
+            body=fresh_body[:8000] if fresh_body else None,
+            offer_snapshot=offer_snapshot,
+            received_at=datetime.utcnow(),
+        )
+    )
+
+    vendor = session.get(Vendor, neg.vendor_id)
+    vlabel = vendor.name if vendor else "vendor"
+    summary = (parsed.get("summary") or "").strip()
+    parts: List[str] = []
+    if summary:
+        parts.append(summary[:400])
+    if avg_mid is not None:
+        parts.append(f"Blended midpoint ~${avg_mid:.2f}")
+    if firm:
+        parts.append("Possible firm commitment flagged — review before auto-follow-up.")
+    message = " — ".join(parts) if parts else "Parsed contract negotiation reply."
+
+    session.add(
+        Notification(
+            title=f"Contract reply from {vlabel}",
+            message=message,
+        )
+    )
+    session.commit()
+
+    try:
+        from agents.contract_lifecycle import maybe_send_counter_offers
+
+        maybe_send_counter_offers(session, cid)
+    except Exception as exc:
+        print(f"[imap] counter-offer trigger failed: {exc}")
+
+
 def _process_receipt_reply(
     session,
     cycle_id: str,
@@ -1241,6 +1405,19 @@ def _poll_imap_once() -> None:
                 print(f"[imap] skipping non-self outbound-shaped subject={subject!r}")
                 continue
 
+            contract_ref = _extract_contract_neg_ref(subject, body)
+            if contract_ref:
+                cid_str, nid_str = contract_ref
+                print(
+                    f"[imap] processing contract negotiation reply subject={subject!r} "
+                    f"from={msg.get('From')!r} contract={cid_str} negotiation={nid_str}"
+                )
+                with DBSession(engine) as session:
+                    _process_contract_negotiation_reply(
+                        session, cid_str, nid_str, subject, body
+                    )
+                continue
+
             po_ref = _extract_po_ref(subject, body)
             quote_ref = _extract_quote_ref(subject, body)
 
@@ -1276,10 +1453,38 @@ def _poll_imap_once() -> None:
 
 # ─── Scheduler lifecycle ──────────────────────────────────────────────────────
 
+
+def _contract_lifecycle_tick_once() -> None:
+    from database import engine
+    from sqlmodel import Session as DBSession
+
+    from agents.contract_lifecycle import daily_contract_lifecycle_tick
+
+    try:
+        with DBSession(engine) as session:
+            summary = daily_contract_lifecycle_tick(session)
+            started = summary.get("started_contract_ids") or []
+            if started:
+                print(f"[contract_lifecycle] started renewals for {len(started)} contract(s)")
+    except Exception as exc:
+        print(f"[contract_lifecycle] tick failed: {exc}")
+
+
 def start_imap_scheduler() -> None:
-    _scheduler.add_job(_poll_imap_once, "interval", seconds=60, id="imap_poll", replace_existing=True)
+    _scheduler.add_job(
+        _poll_imap_once, "interval", seconds=60, id="imap_poll", replace_existing=True
+    )
+    _scheduler.add_job(
+        _contract_lifecycle_tick_once,
+        CronTrigger(hour=12, minute=0),
+        id="contract_lifecycle_daily",
+        replace_existing=True,
+    )
     _scheduler.start()
-    print("[email_daemon] IMAP scheduler started (60s interval)")
+    print(
+        "[email_daemon] scheduler: IMAP poll every 60s; "
+        "contract lifecycle daily at 12:00 (server local time)"
+    )
 
 
 def stop_imap_scheduler() -> None:

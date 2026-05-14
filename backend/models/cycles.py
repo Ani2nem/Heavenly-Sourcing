@@ -12,6 +12,10 @@ class ProcurementCycle(SQLModel, table=True):
     status: str = Field(default="COLLECTING_QUOTES")
     order_type: str = Field(default="WEEKLY")
     week_start_date: Optional[date] = None
+    # Optional FK — weekly spot-buy cycles executed under a long-term contract.
+    contract_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="contracts.id", index=True
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

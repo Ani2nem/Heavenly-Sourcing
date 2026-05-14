@@ -4,7 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database import create_db_and_tables
-from api import admin, profile, menu, procurement, notifications, ingredients
+from api import (
+    admin,
+    alerts,
+    contracts,
+    ingredients,
+    menu,
+    notifications,
+    procurement,
+    profile,
+    vendors,
+)
 
 
 @asynccontextmanager
@@ -28,6 +38,9 @@ app.add_middleware(
 )
 
 app.include_router(profile.router, prefix="/api")
+app.include_router(alerts.router, prefix="/api")
+app.include_router(contracts.router, prefix="/api")
+app.include_router(vendors.router, prefix="/api")
 app.include_router(menu.router, prefix="/api")
 app.include_router(procurement.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")

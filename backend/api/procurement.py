@@ -10,6 +10,7 @@ from database import get_session
 from models import (
     CycleDishForecast,
     CycleIngredientsNeeded,
+    Contract,
     Distributor,
     DistributorQuote,
     DistributorQuoteItem,
@@ -29,6 +30,7 @@ router = APIRouter(tags=["procurement"])
 
 class InitiateCycleRequest(BaseModel):
     dish_forecasts: Dict[str, int]
+    contract_id: Optional[str] = None
 
 
 class ApproveCycleRequest(BaseModel):
@@ -358,6 +360,19 @@ def initiate_cycle(
 
     ingredient_totals = _compute_ingredients_needed(payload.dish_forecasts, session)
 
+    contract_uuid: Optional[uuid.UUID] = None
+    if payload.contract_id:
+        try:
+            contract_uuid = uuid.UUID(payload.contract_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid contract_id")
+        cc = session.get(Contract, contract_uuid)
+        if not cc or cc.restaurant_profile_id != profile.id:
+            raise HTTPException(
+                status_code=400,
+                detail="contract_id must belong to this restaurant",
+            )
+
     try:
         # Start in DISCOVERING_DISTRIBUTORS so the UI doesn't flash a misleading
         # "no distributors found" banner during the 5-15s window where the
@@ -367,6 +382,7 @@ def initiate_cycle(
             restaurant_profile_id=profile.id,
             status="DISCOVERING_DISTRIBUTORS",
             week_start_date=date.today(),
+            contract_id=contract_uuid,
         )
         session.add(cycle)
         session.flush()
@@ -458,6 +474,7 @@ def get_active_cycle(session: Session = Depends(get_session)):
         "cycle_id": str(cycle.id),
         "status": cycle.status,
         "week_start_date": cycle.week_start_date.isoformat() if cycle.week_start_date else None,
+        "contract_id": str(cycle.contract_id) if cycle.contract_id else None,
         "distributor_count": len(distributors_for_cycle),
         "quotes": quotes,
     }

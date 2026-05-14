@@ -23,6 +23,14 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
 
+    # Phase 4 — Yelp Fusion (optional live vendor ratings).
+    yelp_api_key: str = ""
+
+    # Phase 6 — Twilio SMS for actionable manager alerts.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",")]
