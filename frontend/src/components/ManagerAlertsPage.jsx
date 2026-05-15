@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { apiClient } from '../services/api'
 
@@ -40,8 +41,11 @@ export default function ManagerAlertsPage() {
       <header>
         <h1 className="text-2xl font-bold">Manager alerts</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Contract renewal outreach and awards also trigger SMS when you opt in on your profile and
-          Twilio is configured.
+          Contract renewal outreach, awards, and escalations — separate from the weekly ingredient bid cycle on{' '}
+          <Link to="/quotes" className="text-emerald-700 font-medium hover:underline">Quotes</Link>
+          {' / '}
+          <Link to="/procurement" className="text-emerald-700 font-medium hover:underline">Procurement</Link>.
+          SMS fires when you opt in on your profile and Twilio is configured.
         </p>
       </header>
       {rows.length === 0 ? (

@@ -54,7 +54,10 @@ from sqlmodel import Session, select
 from agents.contract_parser import (
     ALLOWED_CATEGORIES,
     ALLOWED_PRICING_STRUCTURES,
+    CONTRACT_TERM_SECTIONS,
     KNOWN_TERM_KEYS,
+    PRICING_STRUCTURE_DESCRIPTIONS,
+    TERM_KEY_LABELS,
     build_demo_contract,
     extract_from_text,
     extract_text_from_upload,
@@ -347,6 +350,9 @@ def contracts_schema():
         "allowed_categories": ALLOWED_CATEGORIES,
         "allowed_pricing_structures": ALLOWED_PRICING_STRUCTURES,
         "known_term_keys": KNOWN_TERM_KEYS,
+        "term_sections": CONTRACT_TERM_SECTIONS,
+        "term_key_labels": TERM_KEY_LABELS,
+        "pricing_structure_descriptions": PRICING_STRUCTURE_DESCRIPTIONS,
     }
 
 

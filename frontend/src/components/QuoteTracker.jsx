@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { apiClient } from '../services/api'
 import ComparisonMatrix from './ComparisonMatrix'
+import SupplyChainStagesGuide from './SupplyChainStagesGuide'
 
 const STATUS_BADGE = {
   PENDING: 'bg-slate-100 text-slate-600',
@@ -60,7 +62,7 @@ export default function QuoteTracker() {
     try {
       const res = await apiClient.post('/api/procurement/cycle/active/approve-optimal')
       toast.success(
-        `Sent ${res.data.pos.length} PO(s) — total $${res.data.grand_total.toFixed(2)}`
+        `Emailed ${res.data.pos.length} PO(s) to distributors — total $${res.data.grand_total.toFixed(2)}. Receipts will attach when invoice mail parses.`
       )
       fetchCycle()
     } catch (err) {
@@ -72,8 +74,15 @@ export default function QuoteTracker() {
 
   if (!cycle) {
     return (
-      <div className="text-slate-500 text-sm">
-        No active procurement cycle. <a href="/procurement" className="text-emerald-600 underline">Start one.</a>
+      <div className="max-w-3xl space-y-4">
+        <p className="text-slate-600 text-sm">
+          No active procurement cycle.{' '}
+          <Link to="/procurement" className="text-emerald-700 font-medium hover:underline">
+            Forecast portions and start a cycle
+          </Link>{' '}
+          — then open Quotes again to watch RFP replies and approve POs.
+        </p>
+        <SupplyChainStagesGuide emphasizeIds={['rfp', 'po']} defaultOpen />
       </div>
     )
   }
@@ -87,7 +96,13 @@ export default function QuoteTracker() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Quote Tracker</h1>
-          <p className="text-slate-500 text-sm mt-1">
+          <p className="text-slate-600 text-sm mt-2 leading-relaxed max-w-3xl">
+            This page is the <strong>RFP / bid</strong> stage: vendors answer your weekly pricing request.
+            The matrix compares line-item quotes only —{' '}
+            <strong>Approve optimal cart</strong> moves you to <strong>PO</strong> emails;{' '}
+            master agreements (Net, SLAs, fixed vs index pricing) stay under Contracts.
+          </p>
+          <p className="text-slate-500 text-sm mt-2">
             Cycle <code className="bg-slate-100 px-1 rounded text-xs">{cycle.cycle_id.slice(0, 8)}…</code>
             &nbsp;·&nbsp;<span className="capitalize">{cycle.status.toLowerCase().replace(/_/g, ' ')}</span>
             {comparison?.grand_total != null && (
@@ -110,6 +125,8 @@ export default function QuoteTracker() {
           </button>
         )}
       </div>
+
+      <SupplyChainStagesGuide emphasizeIds={['rfp', 'po']} />
 
       {/* Discovery in progress — shown immediately after Procure is pressed
           while the background task is geocoding + hitting Google Places. Only
@@ -146,8 +163,15 @@ export default function QuoteTracker() {
       {/* Awaiting receipt banner */}
       {cycle.status === 'AWAITING_RECEIPT' && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
-          POs sent — waiting for vendors to email receipts. They'll appear in
-          Purchase History as soon as they arrive.
+          <p className="font-medium">POs sent — delivery / invoice stage</p>
+          <p className="mt-1 text-xs text-blue-900/90 leading-relaxed">
+            When vendors reply with invoices or PO confirmations, our email processor parses them and attaches{' '}
+            <strong>receipts</strong> to this cycle. Track status on{' '}
+            <a href="/history" className="underline font-medium text-blue-900">
+              Purchase History
+            </a>
+            ; settlement still follows your Net-style terms outside this app.
+          </p>
         </div>
       )}
 

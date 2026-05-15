@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'react-toastify'
 import { apiClient } from '../services/api'
+import SupplyChainStagesGuide from './SupplyChainStagesGuide'
 
 export default function PurchaseHistory() {
   const [history, setHistory] = useState([])
@@ -80,10 +81,25 @@ export default function PurchaseHistory() {
   }
 
   return (
-    <div className="max-w-4xl">
-      <h1 className="text-2xl font-bold mb-6">Purchase History</h1>
+    <div className="max-w-4xl space-y-6">
+      <header>
+        <h1 className="text-2xl font-bold">Purchase History</h1>
+        <p className="text-sm text-slate-600 mt-2 leading-relaxed max-w-3xl">
+          After you approve a cart, formal <strong>POs</strong> go out by email. This list tracks{' '}
+          <strong>delivery / invoice</strong>: we ingest vendor invoice or confirmation mail when your{' '}
+          connected inbox receives it, match it to the PO, and show parsed totals here.{' '}
+          <strong>Payment</strong> (Net 7 / 15 / 30, etc.) follows your supplier agreement — we surface documents,
+          not accounting-system settlement.
+        </p>
+      </header>
+
+      <SupplyChainStagesGuide emphasizeIds={['delivery', 'payment']} />
+
       {history.length === 0 ? (
-        <p className="text-slate-500 text-sm">No completed purchases yet.</p>
+        <p className="text-slate-500 text-sm">
+          No cycles yet. When you <strong>approve a cart</strong> on Quotes, PO emails go out and the cycle
+          lands here — including while invoices are still <strong>awaiting receipt</strong> from email parsing.
+        </p>
       ) : (
         <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
           <table className="w-full text-sm">
@@ -94,7 +110,7 @@ export default function PurchaseHistory() {
                 <th className="text-right px-4 py-3 font-medium text-slate-600">Total Cost</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">Date</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Receipt</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">Receipt / invoice</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -308,17 +324,24 @@ function CycleDetail({ detail, pinging, onRequestReceipt }) {
                       </span>
                     )}
                   </span>
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    Parsed automatically from the vendor email thread when your inbox connection receives it.
+                  </p>
                 </div>
               ) : (
                 <div className="text-sm">
-                  <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
-                    Invoice pending
-                  </span>
-                  {v.last_invoice_ping_at && (
-                    <span className="ml-2 text-xs text-slate-500">
-                      (just pinged)
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                      Invoice pending
                     </span>
-                  )}
+                    {v.last_invoice_ping_at && (
+                      <span className="text-xs text-slate-500">(just pinged)</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-1.5 leading-relaxed">
+                    We&apos;ll attach the receipt when an invoice or PO confirmation email arrives and parses cleanly.
+                    Use Request invoice if the vendor hasn&apos;t emailed documentation yet.
+                  </p>
                 </div>
               )}
               {!hasReceipt && (

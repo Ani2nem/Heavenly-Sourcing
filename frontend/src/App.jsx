@@ -30,6 +30,7 @@ const allNavItems = [
   { to: '/vendors',    label: 'Vendors',         step: 'NEEDS_CONTRACTS' },
   { to: '/menu',       label: 'Menu Upload',     step: 'NEEDS_MENU' },
   { to: '/procurement',label: 'Procurement',     step: 'COMPLETED' },
+  { to: '/quotes',     label: 'Quotes',          step: 'COMPLETED' },
   { to: '/history',    label: 'Purchase History',step: 'COMPLETED' },
 ]
 

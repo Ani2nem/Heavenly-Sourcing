@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { apiClient } from '../services/api'
 
@@ -72,14 +72,53 @@ export default function Contracts() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold">Contracts</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Long-term supplier agreements drive the renewal &amp; negotiation
-          loop. Upload each one you have (one per category is typical), or
-          skip ahead if you don't have any yet — we'll help you sign your
-          first.
-        </p>
+      <header className="space-y-3">
+        <div>
+          <h1 className="text-2xl font-bold">Contracts</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Register negotiated umbrella agreements with suppliers — scope,
+            term dates, pricing model (fixed vs index-tied), payment Net /
+            minimums, delivery expectations (often documented like SLAs),
+            renewal, exclusivity, and similar clauses live here as structured
+            terms.
+          </p>
+          <p className="text-sm text-slate-500 mt-2">
+            Day-to-day buying stays separate: weekly RFPs, PO lines,
+            deliveries, and AP invoices run through procurement — contracts give
+            the baseline rules those cycles plug into.
+          </p>
+        </div>
+        <details className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 text-sm text-slate-700">
+          <summary className="cursor-pointer font-medium text-slate-800 select-none">
+            What belongs on this screen vs procurement?
+          </summary>
+          <ul className="mt-2 ml-4 list-disc space-y-1 text-slate-600">
+            <li>
+              <strong className="font-medium text-slate-700">Here:</strong>{' '}
+              master agreement row — supplier × scope/category × term window ×{' '}
+              <code className="text-xs bg-slate-100 px-1 rounded">pricing_structure</code>{' '}
+              plus extracted clauses (payment terms, MOQs, delivery cadence,
+              rebates, renewal notice, etc.).
+            </li>
+            <li>
+              <strong className="font-medium text-slate-700">
+                Weekly spot flow:
+              </strong>{' '}
+              <Link to="/procurement" className="text-emerald-700 font-medium hover:underline">
+                Procurement
+              </Link>{' '}
+              (forecast) →{' '}
+              <Link to="/quotes" className="text-emerald-700 font-medium hover:underline">
+                Quotes
+              </Link>{' '}
+              (RFP &amp; approve PO) →{' '}
+              <Link to="/history" className="text-emerald-700 font-medium hover:underline">
+                Purchase History
+              </Link>{' '}
+              (parsed invoices vs PO). Payment stays in your AP stack; we reference Net-style terms in PO copy.
+            </li>
+          </ul>
+        </details>
       </header>
 
       <ActionTiles
@@ -733,8 +772,22 @@ function StatusPill({ verified, status }) {
 function ContractVerifierModal({ initial, readOnly, onClose, onSaved }) {
   const [draft, setDraft] = useState(() => normaliseDraft(initial))
   const [saving, setSaving] = useState(false)
+  const [schema, setSchema] = useState(null)
 
   const lowConfidence = new Set(initial.low_confidence_fields || [])
+
+  useEffect(() => {
+    let cancelled = false
+    apiClient
+      .get('/api/contracts/schema')
+      .then(({ data }) => {
+        if (!cancelled) setSchema(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const update = (path, value) =>
     setDraft((d) => setByPath(d, path, value))
@@ -779,6 +832,15 @@ function ContractVerifierModal({ initial, readOnly, onClose, onSaved }) {
                 the extractor as low confidence.
               </p>
             )}
+            {!readOnly && (
+              <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                You&apos;re confirming one umbrella agreement: negotiated rules
+                for pricing mechanics, payment / credit (e.g. Net terms),
+                operational delivery expectations (SLA-style where written),
+                renewal and exclusivity — not individual weekly POs or
+                invoices.
+              </p>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -796,20 +858,59 @@ function ContractVerifierModal({ initial, readOnly, onClose, onSaved }) {
               onChange={(v) => update(['nickname'], v)}
               readOnly={readOnly}
             />
-            <LField
-              label="Primary Category"
-              value={draft.primary_category || ''}
-              onChange={(v) => update(['primary_category'], v)}
-              flagged={lowConfidence.has('primary_category')}
-              readOnly={readOnly}
-            />
-            <LField
-              label="Pricing Structure"
-              value={draft.pricing_structure}
-              onChange={(v) => update(['pricing_structure'], v)}
-              flagged={lowConfidence.has('pricing_structure')}
-              readOnly={readOnly}
-            />
+            {schema?.allowed_categories?.length ? (
+              <SelectField
+                label="Primary category"
+                value={draft.primary_category || ''}
+                options={mergeEnumOptions(
+                  schema.allowed_categories,
+                  draft.primary_category,
+                )}
+                onChange={(v) => update(['primary_category'], v)}
+                flagged={lowConfidence.has('primary_category')}
+                readOnly={readOnly}
+              />
+            ) : (
+              <LField
+                label="Primary Category"
+                value={draft.primary_category || ''}
+                onChange={(v) => update(['primary_category'], v)}
+                flagged={lowConfidence.has('primary_category')}
+                readOnly={readOnly}
+              />
+            )}
+            {schema?.allowed_pricing_structures?.length ? (
+              <>
+                <SelectField
+                  label="Pricing structure"
+                  value={draft.pricing_structure || ''}
+                  options={mergeEnumOptions(
+                    schema.allowed_pricing_structures,
+                    draft.pricing_structure,
+                  )}
+                  onChange={(v) => update(['pricing_structure'], v)}
+                  flagged={lowConfidence.has('pricing_structure')}
+                  readOnly={readOnly}
+                />
+                {schema.pricing_structure_descriptions?.[
+                  draft.pricing_structure
+                ] && (
+                  <p className="text-[11px] text-slate-600 -mt-1 leading-snug">
+                    {schema.pricing_structure_descriptions[
+                      draft.pricing_structure
+                    ]}
+                  </p>
+                )}
+              </>
+            ) : (
+              <LField
+                label="Pricing Structure"
+                value={draft.pricing_structure}
+                onChange={(v) => update(['pricing_structure'], v)}
+                flagged={lowConfidence.has('pricing_structure')}
+                readOnly={readOnly}
+              />
+            )}
             <div className="grid grid-cols-2 gap-3">
               <LField
                 label="Start date"
@@ -894,9 +995,21 @@ function ContractVerifierModal({ initial, readOnly, onClose, onSaved }) {
             )}
           </Section>
 
-          <Section title="Negotiated terms">
-            <TermsTable
+          <Section
+            title="Negotiated terms"
+            subtitle={
+              <span className="normal-case font-normal text-slate-500">
+                Grouped like operators read agreements: pricing mechanics,
+                payment &amp; minimums, delivery &amp; service commitments,
+                renewal &amp; exclusivity. Anything outside our standard keys
+                lands under Other — please review.
+              </span>
+            }
+          >
+            <SectionedTermsTable
               terms={draft.extracted_terms || {}}
+              termSections={schema?.term_sections}
+              termKeyLabels={schema?.term_key_labels}
               lowConfidence={lowConfidence}
               readOnly={readOnly}
               onChange={(key, next) =>
@@ -939,14 +1052,62 @@ function ContractVerifierModal({ initial, readOnly, onClose, onSaved }) {
 }
 
 
-function Section({ title, children }) {
+function Section({ title, subtitle, children }) {
   return (
     <section className="space-y-3">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-        {title}
-      </h3>
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+          {title}
+        </h3>
+        {subtitle && (
+          <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+            {subtitle}
+          </p>
+        )}
+      </div>
       {children}
     </section>
+  )
+}
+
+/** Ensure current extraction value appears even if not in canonical enum list. */
+function mergeEnumOptions(allowed, current) {
+  const cur = (current || '').trim()
+  const base = (allowed || []).map((v) => ({ value: v, label: v }))
+  if (!cur) return base
+  const has = base.some((o) => o.value === cur)
+  if (has) return base
+  return [{ value: cur, label: `${cur} (from extraction)` }, ...base]
+}
+
+function SelectField({ label, value, options, onChange, flagged, readOnly }) {
+  const ring = flagged
+    ? 'border-amber-300 focus:ring-amber-400'
+    : 'border-slate-300 focus:ring-emerald-500'
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-600 mb-1">
+        {label}
+        {flagged && (
+          <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">
+            verify
+          </span>
+        )}
+      </label>
+      <select
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={readOnly}
+        className={`w-full border ${ring} rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 ${readOnly ? 'bg-slate-50' : 'bg-white'}`}
+      >
+        <option value="">—</option>
+        {(options || []).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
   )
 }
 
@@ -977,57 +1138,179 @@ function LField({ label, value, onChange, flagged, placeholder, readOnly }) {
 }
 
 
-function TermsTable({ terms, lowConfidence, readOnly, onChange }) {
+function SectionedTermsTable({
+  terms,
+  termSections,
+  termKeyLabels,
+  lowConfidence,
+  readOnly,
+  onChange,
+}) {
   const keys = Object.keys(terms || {})
   if (keys.length === 0) {
     return (
       <p className="text-xs text-slate-500 italic">
-        No negotiated terms were extracted. Edit the contract to add MOQ,
-        payment terms, exclusivity, etc.
+        No negotiated terms were extracted. After save you can extend JSON /
+        re-upload — typical fields include Net-style payment days, MOQs,
+        delivery windows, index references, and renewal notice.
       </p>
     )
   }
-  return (
-    <div className="border border-slate-200 rounded-md divide-y divide-slate-100">
-      {keys.map((k) => {
-        const entry = terms[k] || {}
-        const needsVerification = entry.needs_verification || lowConfidence.has(`extracted_terms.${k}`)
-        return (
-          <div key={k} className="px-3 py-2 grid grid-cols-12 gap-2 items-start text-sm">
-            <p className="col-span-4 font-mono text-xs text-slate-700 flex items-center">
-              {k}
-              {needsVerification && (
-                <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">
-                  verify
-                </span>
-              )}
+
+  // Fallback: flat list until schema loads or if backend sends no sections.
+  if (!termSections?.length) {
+    return (
+      <div className="border border-slate-200 rounded-md divide-y divide-slate-100">
+        {keys.sort().map((k) => (
+          <TermRow
+            key={k}
+            termKey={k}
+            entry={terms[k] || {}}
+            displayLabel={termKeyLabels?.[k]}
+            lowConfidence={lowConfidence}
+            readOnly={readOnly}
+            onChange={onChange}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  const sectioned = new Set()
+  for (const sec of termSections) {
+    for (const k of sec.keys || []) sectioned.add(k)
+  }
+
+  const blocks = []
+  for (const sec of termSections) {
+    const secKeys = (sec.keys || []).filter((k) => keys.includes(k))
+    if (secKeys.length === 0) continue
+    blocks.push(
+      <div
+        key={sec.id}
+        className="border border-slate-200 rounded-md overflow-hidden mb-3 last:mb-0"
+      >
+        <div className="bg-slate-50 px-3 py-2 border-b border-slate-200">
+          <h4 className="text-xs font-semibold text-slate-800">{sec.label}</h4>
+          {sec.blurb && (
+            <p className="text-[11px] text-slate-600 mt-0.5 leading-snug">
+              {sec.blurb}
             </p>
-            <div className="col-span-7">
-              <input
-                value={typeof entry.value === 'object'
-                  ? JSON.stringify(entry.value)
-                  : (entry.value ?? '')}
-                onChange={(e) =>
-                  onChange(k, { ...entry, value: coerceTermValue(e.target.value, entry.value) })
-                }
-                readOnly={readOnly}
-                className={`w-full border border-slate-300 rounded px-2 py-1 text-xs ${readOnly ? 'bg-slate-50' : ''}`}
-              />
-              {entry.notes && (
-                <p className="mt-1 text-[11px] text-slate-500 italic">{entry.notes}</p>
-              )}
-            </div>
-            <button
-              onClick={() => onChange(k, { ...entry, needs_verification: !needsVerification })}
-              disabled={readOnly}
-              className="col-span-1 text-[10px] text-slate-400 hover:text-emerald-600 disabled:opacity-40"
-              title="Toggle verify flag"
-            >
-              {needsVerification ? '✓' : '⚠'}
-            </button>
-          </div>
-        )
-      })}
+          )}
+        </div>
+        <div className="divide-y divide-slate-100">
+          {secKeys.map((k) => (
+            <TermRow
+              key={k}
+              termKey={k}
+              entry={terms[k] || {}}
+              displayLabel={termKeyLabels?.[k]}
+              lowConfidence={lowConfidence}
+              readOnly={readOnly}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      </div>,
+    )
+  }
+
+  const otherKeys = keys.filter((k) => !sectioned.has(k)).sort()
+  if (otherKeys.length > 0) {
+    blocks.push(
+      <div
+        key="_other"
+        className="border border-amber-100 rounded-md overflow-hidden"
+      >
+        <div className="bg-amber-50 px-3 py-2 border-b border-amber-100">
+          <h4 className="text-xs font-semibold text-amber-900">
+            Other extracted clauses
+          </h4>
+          <p className="text-[11px] text-amber-900/80 mt-0.5 leading-snug">
+            Keys outside our standard checklist — confirm meaning before
+            relying on them.
+          </p>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {otherKeys.map((k) => (
+            <TermRow
+              key={k}
+              termKey={k}
+              entry={terms[k] || {}}
+              displayLabel={termKeyLabels?.[k]}
+              lowConfidence={lowConfidence}
+              readOnly={readOnly}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      </div>,
+    )
+  }
+
+  return <div className="space-y-0">{blocks}</div>
+}
+
+function TermRow({
+  termKey,
+  entry,
+  displayLabel,
+  lowConfidence,
+  readOnly,
+  onChange,
+}) {
+  const needsVerification =
+    entry.needs_verification ||
+    lowConfidence.has(`extracted_terms.${termKey}`)
+  return (
+    <div className="px-3 py-2 grid grid-cols-12 gap-2 items-start text-sm">
+      <div className="col-span-4">
+        <p className="text-xs font-medium text-slate-800">
+          {displayLabel || termKey}
+          {needsVerification && (
+            <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700">
+              verify
+            </span>
+          )}
+        </p>
+        {displayLabel && (
+          <p className="font-mono text-[10px] text-slate-400 mt-0.5">{termKey}</p>
+        )}
+      </div>
+      <div className="col-span-7">
+        <input
+          value={
+            typeof entry.value === 'object'
+              ? JSON.stringify(entry.value)
+              : (entry.value ?? '')
+          }
+          onChange={(e) =>
+            onChange(termKey, {
+              ...entry,
+              value: coerceTermValue(e.target.value, entry.value),
+            })
+          }
+          readOnly={readOnly}
+          className={`w-full border border-slate-300 rounded px-2 py-1 text-xs ${readOnly ? 'bg-slate-50' : ''}`}
+        />
+        {entry.notes && (
+          <p className="mt-1 text-[11px] text-slate-500 italic">{entry.notes}</p>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() =>
+          onChange(termKey, {
+            ...entry,
+            needs_verification: !needsVerification,
+          })
+        }
+        disabled={readOnly}
+        className="col-span-1 text-[10px] text-slate-400 hover:text-emerald-600 disabled:opacity-40"
+        title="Toggle verify flag"
+      >
+        {needsVerification ? '✓' : '⚠'}
+      </button>
     </div>
   )
 }

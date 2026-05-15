@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { apiClient } from '../services/api'
+import SupplyChainStagesGuide from './SupplyChainStagesGuide'
 
 const UNIT_OPTIONS = ['lb', 'oz', 'fl oz', 'cup', 'tbsp', 'tsp', 'each', 'g', 'kg', 'ml', 'l']
 const CATEGORY_OPTIONS = [
@@ -132,7 +133,7 @@ export default function RecipeAccordion() {
       const body = { dish_forecasts }
       if (linkedContractId) body.contract_id = linkedContractId
       await apiClient.post('/api/procurement/cycle/initiate', body)
-      toast.success('Cycle started — dispatching RFPs…')
+      toast.success('Cycle started — RFP emails dispatching. Open Quotes to compare replies and approve POs.')
       navigate('/quotes')
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to start cycle')
@@ -152,10 +153,16 @@ export default function RecipeAccordion() {
   return (
     <div className="max-w-3xl">
       <h1 className="text-2xl font-bold mb-2">Forecast Your Dishes</h1>
-      <p className="text-slate-500 text-sm mb-4">
-        Set how many portions of each dish you'll serve this week, then start the procurement cycle.
+      <p className="text-slate-500 text-sm mb-3">
+        Set how many portions of each dish you&apos;ll serve this week — that forecast rolls up into
+        ingredient demand for the <strong>weekly RFP</strong>. After distributors reply, compare on{' '}
+        <strong>Quotes</strong> and approve the cart to send <strong>PO emails</strong>.
         Expand a dish to review ingredients and USDA price trends — edit, add, or remove anything the parser got wrong.
       </p>
+      <SupplyChainStagesGuide
+        emphasizeIds={['rfp', 'po']}
+        className="mb-4"
+      />
       <button
         type="button"
         onClick={loadRecipes}
@@ -235,6 +242,14 @@ export default function RecipeAccordion() {
         <label className="block text-xs font-medium text-slate-600 mb-1">
           Link to contract (optional)
         </label>
+        <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+          Tie this spot-buy cycle to a master agreement for context (renewal, benchmarks).
+          Contract Net terms and SLAs live on{' '}
+          <Link to="/contracts" className="text-emerald-700 font-medium hover:underline">
+            Contracts
+          </Link>
+          — they are not the same as this week&apos;s bid email.
+        </p>
         <select
           value={linkedContractId}
           onChange={(e) => setLinkedContractId(e.target.value)}

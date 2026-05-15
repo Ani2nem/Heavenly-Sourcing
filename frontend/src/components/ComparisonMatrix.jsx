@@ -32,9 +32,11 @@ export default function ComparisonMatrix({ data }) {
         <h2 className="text-lg font-semibold text-slate-800">Per-Ingredient Comparison</h2>
         <p className="text-xs text-slate-500 mt-1">
           Cheapest vendor per row is highlighted. The optimal cart picks the green cell on every
-          row. <strong>When a vendor's quote arrives that's more expensive than another vendor's
+          row. <strong>This grid is bid evaluation for the current cycle only</strong> — not your master
+          agreement (Net terms, SLAs, fixed vs index pricing live under Contracts).{' '}
+          When a vendor&apos;s quote arrives that&apos;s more expensive than another vendor&apos;s
           quote on the same ingredient, the system automatically emails them asking if they can
-          match the lower price.</strong> If they reply with a new price, the matrix updates live.
+          match the lower price. If they reply with a new price, the matrix updates live.
         </p>
       </div>
 

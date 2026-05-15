@@ -74,6 +74,81 @@ KNOWN_TERM_KEYS = [
     "price_review_cadence",      # MONTHLY | QUARTERLY | ANNUAL | FIXED
 ]
 
+# Short labels for verifier UI (keys still stored as snake_case in JSON).
+TERM_KEY_LABELS: Dict[str, str] = {
+    "payment_terms_days": "Payment terms (days — Net-style settlement)",
+    "min_order_dollars": "Minimum order ($)",
+    "min_order_lines": "Minimum order (lines)",
+    "delivery_window": "Delivery window",
+    "delivery_cadence": "Delivery cadence",
+    "auto_renewal": "Auto-renewal",
+    "renewal_notice_days": "Renewal notice (days)",
+    "termination_fee_pct": "Termination fee (%)",
+    "exclusivity": "Exclusivity",
+    "exclusivity_carveouts": "Exclusivity carve-outs",
+    "fuel_surcharge": "Fuel / freight surcharge",
+    "broken_case_fee": "Broken-case fee",
+    "volume_rebate_tiers": "Volume rebates / tiers",
+    "price_index_reference": "Price index reference",
+    "price_review_cadence": "Price review cadence",
+}
+
+# Group extracted_terms for production-facing verifier UX (umbrella agreement).
+CONTRACT_TERM_SECTIONS: List[Dict[str, Any]] = [
+    {
+        "id": "pricing_mechanics",
+        "label": "Pricing & adjustments",
+        "blurb": (
+            "How money moves on product: fixed vs index-linked pricing, "
+            "surcharges, rebates, and review cadence — distinct from weekly spot quotes."
+        ),
+        "keys": [
+            "price_index_reference",
+            "price_review_cadence",
+            "fuel_surcharge",
+            "broken_case_fee",
+            "volume_rebate_tiers",
+        ],
+    },
+    {
+        "id": "payment_credit",
+        "label": "Payment & minimums",
+        "blurb": (
+            "Commercial settlement (e.g. Net 7/15/30, COD, statement billing) "
+            "and minimum buy rules — payment follows invoices after delivery, not prepaid for the whole term."
+        ),
+        "keys": ["payment_terms_days", "min_order_dollars", "min_order_lines"],
+    },
+    {
+        "id": "delivery_service",
+        "label": "Delivery & service (SLA-style)",
+        "blurb": (
+            "Operational expectations: drop windows, cadence, cutoffs — what distributors "
+            "often document as service levels alongside the price sheet."
+        ),
+        "keys": ["delivery_window", "delivery_cadence"],
+    },
+    {
+        "id": "legal_renewal",
+        "label": "Renewal, termination & exclusivity",
+        "blurb": "How the agreement renews or ends, exclusivity, and related carve-outs.",
+        "keys": [
+            "auto_renewal",
+            "renewal_notice_days",
+            "termination_fee_pct",
+            "exclusivity",
+            "exclusivity_carveouts",
+        ],
+    },
+]
+
+PRICING_STRUCTURE_DESCRIPTIONS: Dict[str, str] = {
+    "FIXED": "Locked unit prices for the term (schedule-style pricing).",
+    "COST_PLUS": "Vendor landed cost plus an agreed markup.",
+    "MARKET_TIED": "Prices tied to a published index (e.g. AMS/CME) ± spread.",
+    "MIXED": "Some SKUs fixed, others cost-plus or index-linked — typical broadline deals.",
+}
+
 
 # ─── PDF text extraction ─────────────────────────────────────────────────────
 

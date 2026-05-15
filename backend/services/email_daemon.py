@@ -17,6 +17,7 @@ returns a single bytes blob per FETCH which is much easier to parse safely.
 from __future__ import annotations
 
 import email as email_lib
+import html as html_std
 import imaplib
 import json
 import re
@@ -255,6 +256,9 @@ def _build_rfp_html(
     quote_id: str,
     benchmarks: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
+    esc = lambda s: html_std.escape(str(s or ""), quote=False)
+    safe_dist = esc(distributor_name)
+
     bench_by_name = {b["name"]: b for b in (benchmarks or [])}
 
     def _bench_cell(name: str) -> str:
@@ -285,8 +289,8 @@ def _build_rfp_html(
         """The amount our recipes actually consume per cycle (informational)."""
         plan = item.get("purchase_plan")
         if plan:
-            return f"{plan['recipe_need_qty']:.2f} {plan['recipe_need_unit']}"
-        return f"{item['qty']:.2f} {item['unit']}"
+            return f"{plan['recipe_need_qty']:.2f} {esc(plan['recipe_need_unit'])}"
+        return f"{item['qty']:.2f} {esc(item['unit'])}"
 
     def _order_cell(item: Dict[str, Any]) -> str:
         """What we actually want the vendor to ship — pack-rounded.
@@ -295,11 +299,11 @@ def _build_rfp_html(
         plan = item.get("purchase_plan")
         if plan:
             return (
-                f"<strong>{plan['packs_needed']} × {plan['pack_label']}</strong>"
-                f"<br><span style='color:#64748b;font-size:90%'>"
-                f"= {plan['total_in_pack_unit']:.0f} {plan['pack_unit']} total</span>"
+                f"<strong>{esc(plan['packs_needed'])} × {esc(plan['pack_label'])}</strong>"
+                f"<br><span style=\"color:#64748b;font-size:90%\">"
+                f"= {plan['total_in_pack_unit']:.0f} {esc(plan['pack_unit'])} total</span>"
             )
-        return f"{item['qty']:.2f} {item['unit']}"
+        return f"{item['qty']:.2f} {esc(item['unit'])}"
 
     has_split = any((i.get("shelf_life_days") or 99) <= 4 for i in ingredient_list)
     has_pack_plan = any(i.get("purchase_plan") for i in ingredient_list)
@@ -307,73 +311,146 @@ def _build_rfp_html(
     rows = "".join(
         (
             f"<tr>"
-            f"<td>{i['name']}</td>"
+            f"<td>{esc(i['name'])}</td>"
             f"<td>{_recipe_need_cell(i)}</td>"
             f"<td>{_order_cell(i)}</td>"
             f"<td>{_delivery_cell(i['shelf_life_days'])}</td>"
-            f"<td>{_bench_cell(i['name'])}</td>"
+            f"<td>{esc(_bench_cell(i['name']))}</td>"
             f"</tr>"
         )
         for i in ingredient_list
     )
 
     delivery_block = """
-<p><strong>Delivery preferences:</strong></p>
-<ul>
-  <li>Default: <strong>Monday morning delivery</strong> for all standard items.</li>"""
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">Delivery &amp; service (scope)</h3>
+<ul style="margin-top:0.35em;">
+  <li><strong>Requested windows:</strong> default <strong>Monday morning</strong> for standard items.</li>"""
     if has_split:
         delivery_block += """
-  <li>Items marked "split drop" have a short shelf life. Please deliver
-      <strong>half on Friday morning</strong> and <strong>the other half on Monday morning</strong>
-      so we don't lose product.</li>"""
+  <li><strong>Split-drop items:</strong> short shelf-life SKUs — please confirm ability to deliver
+      <strong>half Friday AM</strong> and <strong>half Monday AM</strong> (or propose an equivalent that protects yield).</li>"""
     delivery_block += """
-  <li>Please confirm in your reply whether you can hit those windows; if not,
-      let us know your closest available drop time.</li>
+  <li>If you cannot meet a window, please state your nearest feasible schedule and any cut-off times.</li>
 </ul>
 """
 
     pack_note = ""
     if has_pack_plan:
         pack_note = (
-            "<p><strong>How to quote:</strong> our recipes consume the amount in the "
-            "<em>Recipe Need</em> column, but please quote prices on the standard "
-            "wholesale pack in the <em>Order This</em> column "
-            "(reply with <em>price per pack</em>). If a different pack size makes "
-            "more sense for any item, just say so in your reply.</p>"
+            "<h3 style=\"font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;\">"
+            "How to structure your quote</h3>"
+            "<p>Recipes consume the <em>Recipe Need</em> quantity; please quote against the wholesale pack described in "
+            "<em>Order This</em> (price <strong>per pack</strong> unless you specify otherwise). "
+            "If an alternate case/pack is standard for your catalogue, list it explicitly.</p>"
         )
 
+    lifecycle_note = """
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">Where this fits in our process</h3>
+<p style="font-size:13px;color:#334155;">
+  In foodservice procurement, pricing requests typically precede a formal supplier relationship:
+  <strong>RFP / bid → evaluation → negotiation → master agreement</strong> (pricing methodology, SLAs, delivery cadence,
+  credit terms such as Net 7 / 15 / 30 or COD). <strong>Purchase orders</strong> then drive individual deliveries;
+  <strong>invoices</strong> reconcile to those POs; <strong>payment</strong> follows the agreed terms after delivery —
+  not as a single upfront payment for an entire multi-month agreement. This message is a pricing RFP for
+  <strong>the current cycle only</strong>; any award leads to a separate PO / fulfillment step under those eventual terms.
+</p>
+"""
+
     return f"""
-<html><body>
-<h2>Request for Pricing — {distributor_name}</h2>
-<p>We are requesting weekly pricing for the items below.</p>
-<table border="1" cellpadding="6" cellspacing="0">
-  <thead>
+<html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;line-height:1.55;max-width:720px;">
+<h1 style="font-size:20px;margin:0 0 4px 0;">Request for Proposal (RFP)</h1>
+<p style="margin:0;font-size:15px;color:#475569;font-weight:600;">Invitation to bid — weekly ingredient basket · {safe_dist}</p>
+
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.5em;">1. Introduction &amp; background</h3>
+<p>
+  Our restaurant is sourcing distributors for a defined weekly ingredient requirement through HeavenlySourcing.
+  This RFP is a <strong>formal request for written pricing</strong> so we can compare proposals on a consistent basis.
+  You are invited because your firm appears capable of supplying the categories below.
+</p>
+
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">2. Scope &amp; objectives</h3>
+<p>
+  <strong>Objective:</strong> obtain firm, line-item pricing for the basket in the schedule, confirm feasibility of the
+  requested delivery windows, and surface any MOQs, split-case charges, or substitutions we should plan for.
+  This RFP does <strong>not</strong> constitute a purchase order or binding commitment to buy; it supports evaluation only.
+</p>
+
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px;margin-top:0.75em;">
+  <thead style="background:#f8fafc;">
     <tr>
-      <th>Ingredient</th>
-      <th>Recipe Need</th>
-      <th>Order This</th>
-      <th>Delivery Window</th>
-      <th>Reference Benchmark</th>
+      <th align="left">Ingredient</th>
+      <th align="left">Recipe need<br/><span style="font-weight:normal;color:#64748b;">(kitchen use)</span></th>
+      <th align="left">Order this<br/><span style="font-weight:normal;color:#64748b;">(quote basis)</span></th>
+      <th align="left">Delivery window<br/><span style="font-weight:normal;color:#64748b;">(requested)</span></th>
+      <th align="left">Reference benchmark<br/><span style="font-weight:normal;color:#64748b;">(context only)</span></th>
     </tr>
   </thead>
   <tbody>{rows}</tbody>
 </table>
+<p style="font-size:12px;color:#64748b;margin-top:0.5em;">
+  The &ldquo;Reference benchmark&rdquo; column reflects directional market context for our kitchen &mdash;
+  <strong>not</strong> an instruction to match a price. Please quote your real wholesale economics.
+</p>
+
 {delivery_block}
 {pack_note}
-<p><strong>Reference: Cycle {cycle_id} / Quote {quote_id}</strong></p>
-<p>Thank you,<br>HeavenlySourcing Procurement</p>
+
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">3. Budget &amp; timeline</h3>
+<ul style="margin-top:0.35em;">
+  <li><strong>Cycle:</strong> weekly procurement comparison; we intend to finalize awards promptly after all replies are in.</li>
+  <li><strong>Response:</strong> please send your proposal within <strong>three business days</strong> where possible. If you need more time, reply with a proposed date.</li>
+  <li><strong>Budget posture:</strong> we evaluate proposals on <strong>landed economics</strong> (price, pack fit, reliability of supply), not headline price alone.</li>
+</ul>
+
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">4. Submission guidelines</h3>
+<ul style="margin-top:0.35em;">
+  <li><strong>Channel:</strong> reply to this email (same thread).</li>
+  <li><strong>Format:</strong> line-by-line prices keyed to each ingredient (unit or per-pack, as quoted).</li>
+  <li><strong>Required:</strong> include the reference block below verbatim so we can attach your reply to this RFP.</li>
+  <li>Flag any items you cannot supply, proposed substitutes, and delivery constraints explicitly.</li>
+</ul>
+
+<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.04em;color:#64748b;margin-top:1.25em;">5. Evaluation criteria</h3>
+<ul style="margin-top:0.35em;">
+  <li><strong>Total landed cost</strong> for comparable coverage of the basket.</li>
+  <li><strong>Service &amp; delivery fit</strong> vs. the windows and split-drop needs above.</li>
+  <li><strong>Pack alignment</strong> and clarity of quotation (reduces invoice / receipt discrepancies later).</li>
+  <li><strong>Commercial terms:</strong> willingness to discuss standard foodservice arrangements &mdash; e.g. stated payment terms
+      (Net 7 / 15 / 30, statement billing, COD for new accounts). Final credit and billing mechanics are confirmed before recurring POs.</li>
+</ul>
+
+{lifecycle_note}
+
+<p style="margin-top:1.5em;padding:12px;background:#f1f5f9;border-radius:6px;font-size:13px;">
+  <strong>Reference (required in reply):</strong><br/>
+  Cycle {esc(cycle_id)} / Quote {esc(quote_id)}
+</p>
+
+<p style="margin-top:1.25em;">Respectfully,<br/><strong>HeavenlySourcing</strong> — Procurement desk<br/>
+<span style="color:#64748b;font-size:13px;">Acting on behalf of our restaurant operator</span></p>
 </body></html>
 """
 
 
 def _build_followup_html(distributor_name: str, cycle_id: str, quote_id: str) -> str:
+    dn = html_std.escape(distributor_name or "", quote=False)
+    cid = html_std.escape(str(cycle_id or ""), quote=False)
+    qid = html_std.escape(str(quote_id or ""), quote=False)
     return f"""
-<html><body>
-<p>Hi {distributor_name} team,</p>
-<p>Quick follow-up — we have not yet received your pricing reply for our weekly RFP.
-Could you reply with per-unit prices when convenient?</p>
-<p><strong>Reference: Cycle {cycle_id} / Quote {quote_id}</strong></p>
-<p>Thank you,<br>HeavenlySourcing Procurement</p>
+<html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;line-height:1.55;max-width:560px;">
+<p>Dear {dn} team,</p>
+<p>
+  This is a courtesy follow-up regarding our <strong>Request for Proposal (RFP)</strong> for the current weekly
+  ingredient basket. We have not yet received your written pricing response and would appreciate your reply so we can
+  complete our comparative evaluation on schedule.
+</p>
+<p>
+  Please respond in line-item form as described in the original RFP, and retain the reference identifier below.
+</p>
+<p style="padding:10px;background:#f1f5f9;border-radius:6px;font-size:13px;">
+  <strong>Reference:</strong> Cycle {cid} / Quote {qid}
+</p>
+<p>Thank you,<br/><strong>HeavenlySourcing</strong> — Procurement desk</p>
 </body></html>
 """
 
@@ -459,25 +536,33 @@ order that one elsewhere.</p>
 
 
 def _build_po_html(distributor_name: str, po_payload: Dict[str, Any]) -> str:
+    dn = html_std.escape(distributor_name or "", quote=False)
     rows = "".join(
-        f"<tr><td>{item['ingredient']}</td><td>${(item['unit_price'] if item['unit_price'] is not None else 'N/A')}</td></tr>"
+        f"<tr><td>{html_std.escape(str(item['ingredient']), quote=False)}</td>"
+        f"<td>${(item['unit_price'] if item['unit_price'] is not None else 'N/A')}</td></tr>"
         for item in po_payload.get("items", [])
     )
-    cycle_id = po_payload.get("cycle_id", "")
-    po_id = po_payload.get("po_id", "")
+    cycle_id = html_std.escape(str(po_payload.get("cycle_id", "")), quote=False)
+    po_id = html_std.escape(str(po_payload.get("po_id", "")), quote=False)
     return f"""
-<html><body>
-<h2>Purchase Order Confirmation — {distributor_name}</h2>
-<p>We are confirming our purchase order for cycle {cycle_id}.</p>
-<table border="1" cellpadding="6" cellspacing="0">
-  <thead><tr><th>Ingredient</th><th>Unit Price</th></tr></thead>
+<html><body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;line-height:1.5;max-width:560px;">
+<h2 style="font-size:18px;">Purchase order — {dn}</h2>
+<p>
+  Please fulfill the following line items for procurement cycle <strong>{cycle_id}</strong>.
+  This PO is issued under our routine <strong>order → delivery → invoice</strong> cadence; payment will follow the credit terms
+  agreed in our supplier agreement (e.g. Net 7 / 15 / 30 or as otherwise stated on your invoice).
+</p>
+<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px;">
+  <thead style="background:#f8fafc;"><tr><th align="left">Ingredient</th><th align="left">Unit price</th></tr></thead>
   <tbody>{rows}</tbody>
 </table>
 <p><strong>Total: ${po_payload.get('total') or 'TBD'}</strong></p>
-<p><strong>Please reply with a receipt / invoice once the order is fulfilled.</strong>
-Keep the reference line below in your reply so our system can attach it to this purchase.</p>
+<p>
+  Upon delivery, please provide documentation that ties to this PO. We will reconcile quantity and price against the PO before processing payment.
+  If you reply by email with an invoice or PO confirmation, we can ingest it automatically and attach it to this cycle for our records.
+</p>
 <p><strong>Reference: Cycle {cycle_id} / PO {po_id}</strong></p>
-<p>Thank you,<br>HeavenlySourcing Procurement</p>
+<p>Thank you,<br/><strong>HeavenlySourcing</strong> — Procurement</p>
 </body></html>
 """
 
@@ -526,7 +611,11 @@ def send_rfp_email(
     html = _build_rfp_html(
         distributor_name, ingredient_list, cycle_id, quote_id, benchmarks
     )
-    _send_email(to_email, f"RFP: Pricing Request — {distributor_name}", html)
+    _send_email(
+        to_email,
+        f"RFP: Weekly ingredient bid invitation — {distributor_name}",
+        html,
+    )
 
 
 def send_followup_email(
@@ -536,7 +625,11 @@ def send_followup_email(
     quote_id: str,
 ) -> None:
     html = _build_followup_html(distributor_name, cycle_id, quote_id)
-    _send_email(to_email, f"Follow-up: Pricing Request — {distributor_name}", html)
+    _send_email(
+        to_email,
+        f"Follow-up: RFP response requested — {distributor_name}",
+        html,
+    )
 
 
 def send_match_request_email(
